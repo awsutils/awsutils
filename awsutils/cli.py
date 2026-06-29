@@ -1,5 +1,6 @@
 import argparse
 import concurrent.futures
+import ipaddress
 import json
 import os
 import platform
@@ -177,8 +178,9 @@ AVAILABLE COMMANDS
      create-fix-job - Create a VPC fix job
 
 DESCRIPTION
-     Starts a background job that enables common VPC endpoints and S3 VPC Flow
-     Logs for selected VPCs, or all VPCs in the current region.
+     Starts a background job that repairs missing VPC networking components,
+     then enables common VPC endpoints and S3 VPC Flow Logs for selected VPCs,
+     or all VPCs in the current region.
 
 SYNOPSIS
      aws utils vpc create-fix-job
@@ -705,6 +707,30 @@ def _all_vpc_ids(region):
     return text.split() if text else []
 
 
+def _availability_zones(region):
+    return _aws_json([
+        "ec2",
+        "describe-availability-zones",
+        *_region_arg(region),
+        "--filters",
+        "Name=state,Values=available",
+        "--query",
+        "AvailabilityZones[*].ZoneName",
+    ], default=[]) or []
+
+
+def _subnets(vpc_id, region):
+    return _aws_json([
+        "ec2",
+        "describe-subnets",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        "--query",
+        "Subnets",
+    ], default=[]) or []
+
+
 def _route_tables(vpc_id, region):
     return _aws_json([
         "ec2",
@@ -726,6 +752,286 @@ def _route_table_has_igw(table):
         if route.get("DestinationCidrBlock") == "0.0.0.0/0" and str(route.get("GatewayId", "")).startswith("igw-"):
             return True
     return False
+
+
+def _main_route_table(tables):
+    return next((table for table in tables if any(assoc.get("Main") for assoc in table.get("Associations", []))), None)
+
+
+def _explicit_route_table_map(tables):
+    out = {}
+    for table in tables:
+        for assoc in table.get("Associations", []):
+            subnet_id = assoc.get("SubnetId")
+            if subnet_id:
+                out[subnet_id] = table
+    return out
+
+
+def _effective_route_table(subnet_id, tables):
+    return _explicit_route_table_map(tables).get(subnet_id) or _main_route_table(tables)
+
+
+def _subnet_ids_by_route(vpc_id, region, public):
+    tables = _route_tables(vpc_id, region)
+    result = []
+    for subnet in _subnets(vpc_id, region):
+        table = _effective_route_table(subnet.get("SubnetId"), tables)
+        if table and _route_table_has_igw(table) == public:
+            result.append(subnet.get("SubnetId"))
+    return [item for item in result if item]
+
+
+def _subnets_in_az(subnet_ids, subnet_by_id, az):
+    return [subnet_id for subnet_id in subnet_ids if subnet_by_id.get(subnet_id, {}).get("AvailabilityZone") == az]
+
+
+def _has_subnets_in_each_az(subnet_ids, subnet_by_id, azs):
+    return all(_subnets_in_az(subnet_ids, subnet_by_id, az) for az in azs)
+
+
+def _next_free_subnet_cidrs(vpc_cidr, existing_cidrs, count):
+    if count <= 0:
+        return []
+    vpc_network = ipaddress.ip_network(vpc_cidr)
+    existing = [ipaddress.ip_network(cidr) for cidr in existing_cidrs]
+    start_prefix = 24 if vpc_network.prefixlen < 24 else vpc_network.prefixlen + 1
+    for prefix in range(start_prefix, 29):
+        chosen = []
+        for candidate in vpc_network.subnets(new_prefix=prefix):
+            if any(candidate.overlaps(used) for used in [*existing, *chosen]):
+                continue
+            chosen.append(candidate)
+            if len(chosen) == count:
+                return [str(cidr) for cidr in chosen]
+    return []
+
+
+def _ensure_igw(vpc_id, vpc_name, region):
+    igw_id = _aws_text([
+        "ec2",
+        "describe-internet-gateways",
+        *_region_arg(region),
+        "--filters",
+        f"Name=attachment.vpc-id,Values={vpc_id}",
+        "--query",
+        "InternetGateways[0].InternetGatewayId",
+    ])
+    if igw_id:
+        return igw_id
+    igw_id = _aws_text([
+        "ec2",
+        "create-internet-gateway",
+        *_region_arg(region),
+        "--tag-specifications",
+        f"ResourceType=internet-gateway,Tags=[{{Key=Name,Value={vpc_name}-igw}}]",
+        "--query",
+        "InternetGateway.InternetGatewayId",
+    ])
+    if not igw_id:
+        return ""
+    if not _aws_ok(["ec2", "attach-internet-gateway", *_region_arg(region), "--internet-gateway-id", igw_id, "--vpc-id", vpc_id]):
+        return ""
+    _print_job_event(f"{vpc_id}: created internet gateway {igw_id}")
+    return igw_id
+
+
+def _create_subnet(vpc_id, vpc_name, az, cidr, tier, region):
+    subnet_id = _aws_text([
+        "ec2",
+        "create-subnet",
+        *_region_arg(region),
+        "--vpc-id",
+        vpc_id,
+        "--availability-zone",
+        az,
+        "--cidr-block",
+        cidr,
+        "--tag-specifications",
+        f"ResourceType=subnet,Tags=[{{Key=Name,Value={vpc_name}-{tier}-{az}}},{{Key=Tier,Value={tier}}}]",
+        "--query",
+        "Subnet.SubnetId",
+    ])
+    if subnet_id and tier == "public":
+        _aws_ok(["ec2", "modify-subnet-attribute", *_region_arg(region), "--subnet-id", subnet_id, "--map-public-ip-on-launch"])
+    if subnet_id:
+        _print_job_event(f"{vpc_id}: created {tier} subnet {subnet_id} ({cidr}, {az})")
+    return subnet_id
+
+
+def _explicit_route_table_id(subnet_id, region):
+    return _aws_text([
+        "ec2",
+        "describe-route-tables",
+        *_region_arg(region),
+        "--filters",
+        f"Name=association.subnet-id,Values={subnet_id}",
+        "--query",
+        "RouteTables[0].RouteTableId",
+    ])
+
+
+def _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, region):
+    rt_id = _aws_text([
+        "ec2",
+        "describe-route-tables",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        "--query",
+        "RouteTables[?Routes[?DestinationCidrBlock=='0.0.0.0/0' && GatewayId!=null && starts_with(GatewayId,'igw-')]].RouteTableId | [0]",
+    ])
+    if not rt_id:
+        rt_id = _aws_text([
+            "ec2",
+            "create-route-table",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--tag-specifications",
+            f"ResourceType=route-table,Tags=[{{Key=Name,Value={vpc_name}-public-rt}}]",
+            "--query",
+            "RouteTable.RouteTableId",
+        ])
+        if not rt_id:
+            return ""
+        _aws_ok(["ec2", "create-route", *_region_arg(region), "--route-table-id", rt_id, "--destination-cidr-block", "0.0.0.0/0", "--gateway-id", igw_id])
+        _print_job_event(f"{vpc_id}: created public route table {rt_id}")
+    for subnet_id in public_subnet_ids:
+        if not _explicit_route_table_id(subnet_id, region):
+            _aws_ok(["ec2", "associate-route-table", *_region_arg(region), "--route-table-id", rt_id, "--subnet-id", subnet_id])
+    return rt_id
+
+
+def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, region):
+    natgw_id = _aws_text([
+        "ec2",
+        "describe-nat-gateways",
+        *_region_arg(region),
+        "--filter",
+        f"Name=vpc-id,Values={vpc_id}",
+        "Name=state,Values=available,pending",
+        "--query",
+        "NatGateways[0].NatGatewayId",
+    ])
+    if natgw_id:
+        _aws_ok(["ec2", "wait", "nat-gateway-available", *_region_arg(region), "--nat-gateway-ids", natgw_id])
+        return natgw_id
+    alloc_id = _aws_text([
+        "ec2",
+        "allocate-address",
+        *_region_arg(region),
+        "--domain",
+        "vpc",
+        "--tag-specifications",
+        f"ResourceType=elastic-ip,Tags=[{{Key=Name,Value={vpc_name}-nat-eip}}]",
+        "--query",
+        "AllocationId",
+    ])
+    if not alloc_id:
+        return ""
+    natgw_id = _aws_text([
+        "ec2",
+        "create-nat-gateway",
+        *_region_arg(region),
+        "--subnet-id",
+        public_subnet_id,
+        "--allocation-id",
+        alloc_id,
+        "--tag-specifications",
+        f"ResourceType=natgateway,Tags=[{{Key=Name,Value={vpc_name}-natgw}}]",
+        "--query",
+        "NatGateway.NatGatewayId",
+    ])
+    if not natgw_id:
+        return ""
+    _print_job_event(f"{vpc_id}: creating NAT gateway {natgw_id}")
+    if not _aws_ok(["ec2", "wait", "nat-gateway-available", *_region_arg(region), "--nat-gateway-ids", natgw_id]):
+        return ""
+    _print_job_event(f"{vpc_id}: NAT gateway available {natgw_id}")
+    return natgw_id
+
+
+def _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, region):
+    for subnet_id in private_subnet_ids:
+        tables = _route_tables(vpc_id, region)
+        rt = _effective_route_table(subnet_id, tables)
+        rt_id = rt.get("RouteTableId") if rt else ""
+        if not rt_id or _route_table_has_igw(rt):
+            rt_id = _aws_text([
+                "ec2",
+                "create-route-table",
+                *_region_arg(region),
+                "--vpc-id",
+                vpc_id,
+                "--tag-specifications",
+                f"ResourceType=route-table,Tags=[{{Key=Name,Value={vpc_name}-private-rt}}]",
+                "--query",
+                "RouteTable.RouteTableId",
+            ])
+            if not rt_id:
+                continue
+            _aws_ok(["ec2", "associate-route-table", *_region_arg(region), "--route-table-id", rt_id, "--subnet-id", subnet_id])
+            _print_job_event(f"{vpc_id}: associated private route table {rt_id} with {subnet_id}")
+
+        rt_data = _aws_json(["ec2", "describe-route-tables", *_region_arg(region), "--route-table-ids", rt_id, "--query", "RouteTables[0]"], default={}) or {}
+        default_route = next((route for route in rt_data.get("Routes", []) if route.get("DestinationCidrBlock") == "0.0.0.0/0"), None)
+        if default_route and default_route.get("NatGatewayId") == natgw_id:
+            continue
+        action = "replace-route" if default_route else "create-route"
+        if _aws_ok(["ec2", action, *_region_arg(region), "--route-table-id", rt_id, "--destination-cidr-block", "0.0.0.0/0", "--nat-gateway-id", natgw_id]):
+            _print_job_event(f"{vpc_id}: {'replaced' if default_route else 'added'} private default route on {rt_id}")
+
+
+def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
+    igw_id = _ensure_igw(vpc_id, vpc_name, region)
+    if not igw_id:
+        _print_job_event(f"{vpc_id}: could not ensure internet gateway; skipping network repair")
+        return
+
+    target_azs = _availability_zones(region)[:2]
+    if len(target_azs) < 2:
+        _print_job_event(f"{vpc_id}: at least two availability zones are required for network repair")
+        return
+
+    all_subnets = _subnets(vpc_id, region)
+    subnet_by_id = {subnet.get("SubnetId"): subnet for subnet in all_subnets if subnet.get("SubnetId")}
+    public_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=True)
+    private_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=False)
+
+    missing = []
+    for tier, subnet_ids in (("public", public_subnet_ids), ("private", private_subnet_ids)):
+        for az in target_azs:
+            if not _subnets_in_az(subnet_ids, subnet_by_id, az):
+                missing.append((tier, az))
+
+    cidrs = _next_free_subnet_cidrs(vpc_cidr, [subnet.get("CidrBlock") for subnet in all_subnets if subnet.get("CidrBlock")], len(missing))
+    for (tier, az), cidr in zip(missing, cidrs):
+        subnet_id = _create_subnet(vpc_id, vpc_name, az, cidr, tier, region)
+        if not subnet_id:
+            continue
+        subnet_by_id[subnet_id] = {"SubnetId": subnet_id, "AvailabilityZone": az, "CidrBlock": cidr}
+        if tier == "public":
+            public_subnet_ids.append(subnet_id)
+        else:
+            private_subnet_ids.append(subnet_id)
+    if len(cidrs) < len(missing):
+        _print_job_event(f"{vpc_id}: no free CIDR available for {len(missing) - len(cidrs)} missing subnets")
+
+    _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, region)
+    public_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=True)
+    private_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=False)
+    subnet_by_id = {subnet.get("SubnetId"): subnet for subnet in _subnets(vpc_id, region) if subnet.get("SubnetId")}
+
+    if not _has_subnets_in_each_az(public_subnet_ids, subnet_by_id, target_azs) or not _has_subnets_in_each_az(private_subnet_ids, subnet_by_id, target_azs):
+        _print_job_event(f"{vpc_id}: at least two public and two private subnets are required; skipping NAT route repair")
+        return
+
+    natgw_id = _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_ids[0], region)
+    if not natgw_id:
+        _print_job_event(f"{vpc_id}: could not ensure NAT gateway; skipping private route repair")
+        return
+    _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, region)
 
 
 def _private_subnet_ids(vpc_id, region):
@@ -828,7 +1134,9 @@ def _setup_vpc(vpc_id, region, account_id, max_workers):
         _print_job_event(f"{vpc_id}: could not read CIDR; skipping")
         return
 
-    _print_job_event(f"{vpc_id}: configuring endpoints and flow logs")
+    _print_job_event(f"{vpc_id}: repairing networking, endpoints, and flow logs")
+    _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region)
+
     route_table_ids = _all_route_table_ids(vpc_id, region)
     existing = _existing_endpoint_services(vpc_id, region)
 

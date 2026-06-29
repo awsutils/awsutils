@@ -89,13 +89,13 @@ aws utils cloudwatch create-dashboard --max-workers 2
 
 ## VPC Fix Jobs
 
-Start a background job that enables common VPC endpoints and S3 VPC Flow Logs for every VPC in the current region:
+Start a background job that repairs missing VPC networking components, enables common VPC endpoints, and enables S3 VPC Flow Logs for every VPC in the current region:
 
 ```sh
 aws utils vpc create-fix-job
 ```
 
-The job processes VPCs and endpoint creation in parallel. Failed AWS CLI calls are retried up to five times.
+The job processes VPCs and endpoint creation in parallel. Failed AWS CLI calls are retried up to five times. Network repair can create internet gateways, public/private subnets, route tables, Elastic IPs, NAT gateways, VPC endpoints, security groups, S3 buckets, and flow logs.
 
 Limit the job to selected VPCs or a region:
 
