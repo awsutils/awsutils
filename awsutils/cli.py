@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import json
 import os
 import platform
@@ -6,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from urllib.error import URLError
@@ -22,6 +24,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 DEFAULT_ASSET_BASE_URL = "https://awsutils.github.io"
 GATEWAY_ENDPOINTS = ("s3", "dynamodb")
 INTERFACE_ENDPOINTS = ("ecr.dkr", "ecr.api", "ssm", "ssmmessages", "ec2messages", "sqs", "sns")
+PRINT_LOCK = threading.Lock()
+RETRY_ATTEMPTS = 5
 
 
 class NoColorArgumentParser(argparse.ArgumentParser):
@@ -83,6 +87,7 @@ SYNOPSIS
           [--dashboard full|simple|all]
           [--name <value>]
           [--base-url <value>]
+          [--max-workers <value>]
 """)
         return 0
     if topic == ["inspect"]:
@@ -179,6 +184,7 @@ SYNOPSIS
      aws utils vpc create-fix-job
           [--vpc-ids <value>]
           [--region <value>]
+          [--max-workers <value>]
 """)
         return 0
     if topic == ["vpc", "describe-fix-job"]:
@@ -208,11 +214,18 @@ def _read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _run_command(cmd, *, check=False):
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if check and proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or f"command failed: {' '.join(cmd)}")
-    return proc
+def _run_command(cmd, *, check=False, retries=1):
+    last_proc = None
+    for attempt in range(1, retries + 1):
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        last_proc = proc
+        if proc.returncode == 0:
+            return proc
+        if attempt < retries:
+            time.sleep(min(2 ** (attempt - 1), 8))
+    if check and last_proc and last_proc.returncode != 0:
+        raise RuntimeError(last_proc.stderr.strip() or f"command failed: {' '.join(cmd)}")
+    return last_proc
 
 
 def _aws_base_cmd(args):
@@ -221,7 +234,7 @@ def _aws_base_cmd(args):
 
 
 def _aws_json(args, default=None):
-    proc = _run_command(_aws_base_cmd([*args, "--output", "json"]))
+    proc = _run_command(_aws_base_cmd([*args, "--output", "json"]), retries=RETRY_ATTEMPTS)
     if proc.returncode != 0:
         return default
     text = proc.stdout.strip()
@@ -234,7 +247,7 @@ def _aws_json(args, default=None):
 
 
 def _aws_text(args, default=""):
-    proc = _run_command(_aws_base_cmd([*args, "--output", "text"]))
+    proc = _run_command(_aws_base_cmd([*args, "--output", "text"]), retries=RETRY_ATTEMPTS)
     if proc.returncode != 0:
         return default
     text = proc.stdout.strip()
@@ -244,12 +257,27 @@ def _aws_text(args, default=""):
 
 
 def _aws_ok(args):
-    return _run_command(_aws_base_cmd(args)).returncode == 0
+    return _run_command(_aws_base_cmd(args), retries=RETRY_ATTEMPTS).returncode == 0
 
 
 def _aws_call(args):
-    proc = _run_command(_aws_base_cmd(args))
+    proc = _run_command(_aws_base_cmd(args), retries=RETRY_ATTEMPTS)
     return {"ok": proc.returncode == 0, "stdout": proc.stdout.strip(), "stderr": proc.stderr.strip()}
+
+
+def _parallel_map(items, worker, max_workers):
+    items = list(items)
+    if not items:
+        return []
+    workers = max(1, min(max_workers, len(items)))
+    if workers == 1:
+        return [worker(item) for item in items]
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(worker, item) for item in items]
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+    return results
 
 
 def _strip_ansi(text):
@@ -516,19 +544,23 @@ def _read_clean_text(path):
 
 
 def _download_text(url):
-    try:
-        with urlopen(url, timeout=30) as response:
-            return response.read().decode("utf-8")
-    except URLError as exc:
-        raise RuntimeError(f"could not download {url}: {exc}") from exc
+    last_error = None
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            with urlopen(url, timeout=30) as response:
+                return response.read().decode("utf-8")
+        except URLError as exc:
+            last_error = exc
+            if attempt < RETRY_ATTEMPTS:
+                time.sleep(min(2 ** (attempt - 1), 8))
+    raise RuntimeError(f"could not download {url}: {last_error}")
 
 
 def _create_cloudwatch_dashboard(args):
     base_url = args.base_url.rstrip("/")
     selected = ["full", "simple"] if args.dashboard == "all" else [args.dashboard]
-    results = []
 
-    for dashboard in selected:
+    def create_one(dashboard):
         file_name = f"dashboard_{dashboard}.json"
         dashboard_name = args.name or f"dashboard-{dashboard}"
         if args.name and len(selected) > 1:
@@ -543,12 +575,14 @@ def _create_cloudwatch_dashboard(args):
             "--dashboard-body",
             body,
         ])
-        results.append({
+        return {
             "dashboard": dashboard,
             "dashboard_name": dashboard_name,
             "source": f"{base_url}/{file_name}",
             **result,
-        })
+        }
+
+    results = _parallel_map(selected, create_one, args.max_workers)
 
     _json_dump({"dashboards": results})
     return 0 if all(item["ok"] for item in results) else 1
@@ -574,6 +608,7 @@ def _create_vpc_fix_job(args):
         runner_args.extend(["--vpc-ids", args.vpc_ids])
     if args.region:
         runner_args.extend(["--region", args.region])
+    runner_args.extend(["--max-workers", str(args.max_workers)])
 
     state = {
         "job_id": job_id,
@@ -583,6 +618,7 @@ def _create_vpc_fix_job(args):
         "stderr": str(paths["stderr"]),
         "vpc_ids": args.vpc_ids,
         "region": args.region,
+        "max_workers": args.max_workers,
     }
     _write_json(paths["state"], state)
 
@@ -626,7 +662,8 @@ def _describe_vpc_fix_job(args):
 
 
 def _print_job_event(message):
-    print(f"[{_utc_now()}] {message}", flush=True)
+    with PRINT_LOCK:
+        print(f"[{_utc_now()}] {message}", flush=True)
 
 
 def _region_arg(region):
@@ -784,7 +821,7 @@ def _ensure_log_bucket(bucket, region):
     return True
 
 
-def _setup_vpc(vpc_id, region, account_id):
+def _setup_vpc(vpc_id, region, account_id, max_workers):
     vpc_name = _vpc_name(vpc_id, region)
     vpc_cidr = _vpc_cidr(vpc_id, region)
     if not vpc_cidr:
@@ -795,14 +832,14 @@ def _setup_vpc(vpc_id, region, account_id):
     route_table_ids = _all_route_table_ids(vpc_id, region)
     existing = _existing_endpoint_services(vpc_id, region)
 
-    for short in GATEWAY_ENDPOINTS:
+    def create_gateway_endpoint(short):
         service = f"com.amazonaws.{region}.{short}"
         if service in existing:
             _print_job_event(f"{vpc_id}: gateway endpoint {short} already exists")
-            continue
+            return {"endpoint": short, "type": "gateway", "ok": True, "skipped": True}
         if not route_table_ids:
             _print_job_event(f"{vpc_id}: no route tables; skipping gateway endpoint {short}")
-            continue
+            return {"endpoint": short, "type": "gateway", "ok": False, "skipped": True}
         result = _aws_call([
             "ec2",
             "create-vpc-endpoint",
@@ -819,17 +856,21 @@ def _setup_vpc(vpc_id, region, account_id):
             f"ResourceType=vpc-endpoint,Tags=[{{Key=Name,Value={vpc_name}-vpce-{short}}}]",
         ])
         _print_job_event(f"{vpc_id}: {'created' if result['ok'] else 'failed'} gateway endpoint {short}")
+        return {"endpoint": short, "type": "gateway", **result}
+
+    _parallel_map(GATEWAY_ENDPOINTS, create_gateway_endpoint, max_workers)
 
     private_subnets = _private_subnet_ids(vpc_id, region)
     sg_id = _ensure_endpoint_sg(vpc_id, vpc_name, vpc_cidr, region) if private_subnets else ""
-    for short in INTERFACE_ENDPOINTS:
+
+    def create_interface_endpoint(short):
         service = f"com.amazonaws.{region}.{short}"
         if service in existing:
             _print_job_event(f"{vpc_id}: interface endpoint {short} already exists")
-            continue
+            return {"endpoint": short, "type": "interface", "ok": True, "skipped": True}
         if not private_subnets or not sg_id:
             _print_job_event(f"{vpc_id}: skipping interface endpoint {short}; private subnets or security group unavailable")
-            continue
+            return {"endpoint": short, "type": "interface", "ok": False, "skipped": True}
         result = _aws_call([
             "ec2",
             "create-vpc-endpoint",
@@ -849,6 +890,9 @@ def _setup_vpc(vpc_id, region, account_id):
             f"ResourceType=vpc-endpoint,Tags=[{{Key=Name,Value={vpc_name}-vpce-{short}}}]",
         ])
         _print_job_event(f"{vpc_id}: {'created' if result['ok'] else 'failed'} interface endpoint {short}")
+        return {"endpoint": short, "type": "interface", **result}
+
+    _parallel_map(INTERFACE_ENDPOINTS, create_interface_endpoint, max_workers)
 
     existing_flowlog = _aws_text([
         "ec2",
@@ -903,9 +947,8 @@ def _run_vpc_fix_job(args):
             account_id = _aws_text(["sts", "get-caller-identity", "--query", "Account"])
             if not account_id:
                 raise RuntimeError("could not determine AWS account ID")
-            vpc_ids = args.vpc_ids.split(",") if args.vpc_ids else _all_vpc_ids(region)
-            for vpc_id in [item.strip() for item in vpc_ids if item.strip()]:
-                _setup_vpc(vpc_id, region, account_id)
+            vpc_ids = [item.strip() for item in (args.vpc_ids.split(",") if args.vpc_ids else _all_vpc_ids(region)) if item.strip()]
+            _parallel_map(vpc_ids, lambda vpc_id: _setup_vpc(vpc_id, region, account_id, args.max_workers), args.max_workers)
             state["status"] = "SUCCEEDED"
             state["completed_at"] = _utc_now()
             state["region"] = region
@@ -938,6 +981,7 @@ def main():
         run_parser.add_argument("job_id")
         run_parser.add_argument("--vpc-ids")
         run_parser.add_argument("--region")
+        run_parser.add_argument("--max-workers", type=int, default=8)
         return _run_vpc_fix_job(run_parser.parse_args())
 
     if any(arg in {"help", "--help", "-h"} for arg in sys.argv[1:]):
@@ -963,6 +1007,7 @@ def main():
     dashboard_parser.add_argument("--dashboard", choices=("full", "simple", "all"), default="all")
     dashboard_parser.add_argument("--name", help="Dashboard name. With --dashboard all, the dashboard type is appended.")
     dashboard_parser.add_argument("--base-url", default=DEFAULT_ASSET_BASE_URL, help="Base URL for dashboard JSON assets.")
+    dashboard_parser.add_argument("--max-workers", type=int, default=4, help="Maximum parallel dashboard operations.")
 
     inspect_parser = subparsers.add_parser("inspect", help="Run AWS best-practice inspections.", add_help=False)
     inspect_subparsers = inspect_parser.add_subparsers(
@@ -1002,6 +1047,7 @@ def main():
     )
     vpc_create_parser.add_argument("--vpc-ids", help="Comma-separated VPC IDs. Defaults to every VPC in the region.")
     vpc_create_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
+    vpc_create_parser.add_argument("--max-workers", type=int, default=8, help="Maximum parallel VPC and endpoint operations.")
     vpc_describe_parser = vpc_subparsers.add_parser(
         "describe-fix-job",
         help="Describe VPC fix jobs as JSON.",

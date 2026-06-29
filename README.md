@@ -77,11 +77,14 @@ Create the bundled full and simple dashboards:
 aws utils cloudwatch create-dashboard
 ```
 
+Dashboard creation runs in parallel when more than one dashboard is selected, and failed downloads or AWS CLI calls are retried up to five times.
+
 Create one dashboard:
 
 ```sh
 aws utils cloudwatch create-dashboard --dashboard simple
 aws utils cloudwatch create-dashboard --dashboard full --name my-dashboard
+aws utils cloudwatch create-dashboard --max-workers 2
 ```
 
 ## VPC Fix Jobs
@@ -92,10 +95,13 @@ Start a background job that enables common VPC endpoints and S3 VPC Flow Logs fo
 aws utils vpc create-fix-job
 ```
 
+The job processes VPCs and endpoint creation in parallel. Failed AWS CLI calls are retried up to five times.
+
 Limit the job to selected VPCs or a region:
 
 ```sh
 aws utils vpc create-fix-job --vpc-ids vpc-123,vpc-456 --region us-east-1
+aws utils vpc create-fix-job --max-workers 12
 ```
 
 Describe a job or list all known jobs:
