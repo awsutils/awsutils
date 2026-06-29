@@ -4,9 +4,12 @@ Basic AWS CLI v2 extension using AWS CLI aliases. It adds:
 
 ```sh
 aws utils hello
+aws utils cloudwatch create-dashboard
 aws utils inspect create-inspect-job
 aws utils inspect describe-inspect-job --job-id <job-id>
 aws utils inspect describe-inspect-job
+aws utils vpc create-fix-job
+aws utils vpc describe-fix-job --job-id <job-id>
 ```
 
 Expected output:
@@ -65,6 +68,42 @@ aws utils inspect create-inspect-job --concurrency 8 --no-prefetch
 ```
 
 `describe-inspect-job` always returns JSON. If `bptools` emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
+
+## CloudWatch Dashboards
+
+Create the bundled full and simple dashboards:
+
+```sh
+aws utils cloudwatch create-dashboard
+```
+
+Create one dashboard:
+
+```sh
+aws utils cloudwatch create-dashboard --dashboard simple
+aws utils cloudwatch create-dashboard --dashboard full --name my-dashboard
+```
+
+## VPC Fix Jobs
+
+Start a background job that enables common VPC endpoints and S3 VPC Flow Logs for every VPC in the current region:
+
+```sh
+aws utils vpc create-fix-job
+```
+
+Limit the job to selected VPCs or a region:
+
+```sh
+aws utils vpc create-fix-job --vpc-ids vpc-123,vpc-456 --region us-east-1
+```
+
+Describe a job or list all known jobs:
+
+```sh
+aws utils vpc describe-fix-job --job-id <job-id>
+aws utils vpc describe-fix-job
+```
 
 ## Security
 

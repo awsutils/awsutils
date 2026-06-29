@@ -8,15 +8,20 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.error import URLError
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import urlopen, urlretrieve
 
 
 INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
 BPTOOLS_DIR = INSTALL_ROOT / "bin"
 BPTOOLS_BINARY = BPTOOLS_DIR / ("bptools.exe" if os.name == "nt" else "bptools")
 JOBS_DIR = INSTALL_ROOT / "inspect" / "jobs"
+VPC_JOBS_DIR = INSTALL_ROOT / "vpc" / "jobs"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+DEFAULT_ASSET_BASE_URL = "https://awsutils.github.io"
+GATEWAY_ENDPOINTS = ("s3", "dynamodb")
+INTERFACE_ENDPOINTS = ("ecr.dkr", "ecr.api", "ssm", "ssmmessages", "ec2messages", "sqs", "sns")
 
 
 class NoColorArgumentParser(argparse.ArgumentParser):
@@ -48,7 +53,36 @@ SYNOPSIS
 AVAILABLE COMMANDS
      * hello
 
+     * cloudwatch
+
      * inspect
+
+     * vpc
+""")
+        return 0
+    if topic == ["cloudwatch"]:
+        print("""NAME
+     cloudwatch - CloudWatch utility commands
+
+DESCRIPTION
+     Create AWSUtils CloudWatch dashboards.
+
+SYNOPSIS
+     aws utils cloudwatch <command> [parameters]
+
+AVAILABLE COMMANDS
+     * create-dashboard
+""")
+        return 0
+    if topic == ["cloudwatch", "create-dashboard"]:
+        print("""NAME
+     create-dashboard - Create CloudWatch dashboards
+
+SYNOPSIS
+     aws utils cloudwatch create-dashboard
+          [--dashboard full|simple|all]
+          [--name <value>]
+          [--base-url <value>]
 """)
         return 0
     if topic == ["inspect"]:
@@ -117,6 +151,45 @@ OPTIONS
           Inspection job ID returned by create-inspect-job. Omit to list all jobs.
 """)
         return 0
+    if topic == ["vpc"]:
+        print("""NAME
+     vpc - VPC utility commands
+
+DESCRIPTION
+     Start and describe background VPC fix jobs.
+
+SYNOPSIS
+     aws utils vpc <command> [parameters]
+
+AVAILABLE COMMANDS
+     * create-fix-job
+
+     * describe-fix-job
+""")
+        return 0
+    if topic == ["vpc", "create-fix-job"]:
+        print("""NAME
+     create-fix-job - Create a VPC fix job
+
+DESCRIPTION
+     Starts a background job that enables common VPC endpoints and S3 VPC Flow
+     Logs for selected VPCs, or all VPCs in the current region.
+
+SYNOPSIS
+     aws utils vpc create-fix-job
+          [--vpc-ids <value>]
+          [--region <value>]
+""")
+        return 0
+    if topic == ["vpc", "describe-fix-job"]:
+        print("""NAME
+     describe-fix-job - Describe VPC fix jobs
+
+SYNOPSIS
+     aws utils vpc describe-fix-job
+          [--job-id <value>]
+""")
+        return 0
     return None
 
 
@@ -133,6 +206,50 @@ def _write_json(path, data):
 
 def _read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_command(cmd, *, check=False):
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if check and proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or f"command failed: {' '.join(cmd)}")
+    return proc
+
+
+def _aws_base_cmd(args):
+    cmd = ["aws", *args]
+    return cmd
+
+
+def _aws_json(args, default=None):
+    proc = _run_command(_aws_base_cmd([*args, "--output", "json"]))
+    if proc.returncode != 0:
+        return default
+    text = proc.stdout.strip()
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return default
+
+
+def _aws_text(args, default=""):
+    proc = _run_command(_aws_base_cmd([*args, "--output", "text"]))
+    if proc.returncode != 0:
+        return default
+    text = proc.stdout.strip()
+    if text == "None":
+        return default
+    return text
+
+
+def _aws_ok(args):
+    return _run_command(_aws_base_cmd(args)).returncode == 0
+
+
+def _aws_call(args):
+    proc = _run_command(_aws_base_cmd(args))
+    return {"ok": proc.returncode == 0, "stdout": proc.stdout.strip(), "stderr": proc.stderr.strip()}
 
 
 def _strip_ansi(text):
@@ -398,6 +515,414 @@ def _read_clean_text(path):
     return _strip_ansi(path.read_text(encoding="utf-8", errors="replace"))
 
 
+def _download_text(url):
+    try:
+        with urlopen(url, timeout=30) as response:
+            return response.read().decode("utf-8")
+    except URLError as exc:
+        raise RuntimeError(f"could not download {url}: {exc}") from exc
+
+
+def _create_cloudwatch_dashboard(args):
+    base_url = args.base_url.rstrip("/")
+    selected = ["full", "simple"] if args.dashboard == "all" else [args.dashboard]
+    results = []
+
+    for dashboard in selected:
+        file_name = f"dashboard_{dashboard}.json"
+        dashboard_name = args.name or f"dashboard-{dashboard}"
+        if args.name and len(selected) > 1:
+            dashboard_name = f"{args.name}-{dashboard}"
+
+        body = _download_text(f"{base_url}/{file_name}")
+        result = _aws_call([
+            "cloudwatch",
+            "put-dashboard",
+            "--dashboard-name",
+            dashboard_name,
+            "--dashboard-body",
+            body,
+        ])
+        results.append({
+            "dashboard": dashboard,
+            "dashboard_name": dashboard_name,
+            "source": f"{base_url}/{file_name}",
+            **result,
+        })
+
+    _json_dump({"dashboards": results})
+    return 0 if all(item["ok"] for item in results) else 1
+
+
+def _vpc_job_paths(job_id):
+    job_dir = VPC_JOBS_DIR / job_id
+    return {
+        "dir": job_dir,
+        "state": job_dir / "job.json",
+        "stdout": job_dir / "stdout.log",
+        "stderr": job_dir / "stderr.log",
+    }
+
+
+def _create_vpc_fix_job(args):
+    job_id = str(uuid.uuid4())
+    paths = _vpc_job_paths(job_id)
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+
+    runner_args = []
+    if args.vpc_ids:
+        runner_args.extend(["--vpc-ids", args.vpc_ids])
+    if args.region:
+        runner_args.extend(["--region", args.region])
+
+    state = {
+        "job_id": job_id,
+        "status": "PENDING",
+        "created_at": _utc_now(),
+        "stdout": str(paths["stdout"]),
+        "stderr": str(paths["stderr"]),
+        "vpc_ids": args.vpc_ids,
+        "region": args.region,
+    }
+    _write_json(paths["state"], state)
+
+    cmd = [sys.executable, "-m", "awsutils.cli", "_run-vpc-fix-job", job_id, *runner_args]
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    state["status"] = "RUNNING"
+    state["pid"] = proc.pid
+    state["started_at"] = _utc_now()
+    _write_json(paths["state"], state)
+    _json_dump(state)
+    return 0
+
+
+def _describe_vpc_fix_job(args):
+    if not args.job_id:
+        jobs = []
+        if VPC_JOBS_DIR.exists():
+            for state_path in sorted(VPC_JOBS_DIR.glob("*/job.json")):
+                state = _read_json(state_path)
+                state["stdout_bytes"] = len(_read_clean_text(state_path.parent / "stdout.log").encode("utf-8"))
+                state["stderr_bytes"] = len(_read_clean_text(state_path.parent / "stderr.log").encode("utf-8"))
+                jobs.append(state)
+        _json_dump({"jobs": jobs})
+        return 0
+
+    paths = _vpc_job_paths(args.job_id)
+    if not paths["state"].exists():
+        _json_dump({"job_id": args.job_id, "status": "NOT_FOUND"})
+        return 1
+    state = _read_json(paths["state"])
+    state["stdout_text"] = _read_clean_text(paths["stdout"])
+    state["stderr_text"] = _read_clean_text(paths["stderr"])
+    _json_dump(state)
+    return 0
+
+
+def _print_job_event(message):
+    print(f"[{_utc_now()}] {message}", flush=True)
+
+
+def _region_arg(region):
+    return ["--region", region] if region else []
+
+
+def _detect_region(region):
+    if region:
+        return region
+    detected = _aws_text(["ec2", "describe-availability-zones", "--query", "AvailabilityZones[0].RegionName"])
+    if detected:
+        return detected
+    detected = _aws_text(["configure", "get", "region"])
+    return detected or os.environ.get("AWS_DEFAULT_REGION", "")
+
+
+def _vpc_name(vpc_id, region):
+    data = _aws_json([
+        "ec2",
+        "describe-vpcs",
+        *_region_arg(region),
+        "--vpc-ids",
+        vpc_id,
+        "--query",
+        "Vpcs[0]",
+    ], default={}) or {}
+    for tag in data.get("Tags", []):
+        if tag.get("Key") == "Name" and tag.get("Value"):
+            return tag["Value"]
+    return vpc_id
+
+
+def _vpc_cidr(vpc_id, region):
+    return _aws_text(["ec2", "describe-vpcs", *_region_arg(region), "--vpc-ids", vpc_id, "--query", "Vpcs[0].CidrBlock"])
+
+
+def _all_vpc_ids(region):
+    text = _aws_text(["ec2", "describe-vpcs", *_region_arg(region), "--query", "Vpcs[*].VpcId"])
+    return text.split() if text else []
+
+
+def _route_tables(vpc_id, region):
+    return _aws_json([
+        "ec2",
+        "describe-route-tables",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        "--query",
+        "RouteTables",
+    ], default=[]) or []
+
+
+def _all_route_table_ids(vpc_id, region):
+    return [table.get("RouteTableId") for table in _route_tables(vpc_id, region) if table.get("RouteTableId")]
+
+
+def _route_table_has_igw(table):
+    for route in table.get("Routes", []):
+        if route.get("DestinationCidrBlock") == "0.0.0.0/0" and str(route.get("GatewayId", "")).startswith("igw-"):
+            return True
+    return False
+
+
+def _private_subnet_ids(vpc_id, region):
+    tables = _route_tables(vpc_id, region)
+    main_table = next((table for table in tables if any(assoc.get("Main") for assoc in table.get("Associations", []))), None)
+    explicit = {}
+    for table in tables:
+        for assoc in table.get("Associations", []):
+            subnet_id = assoc.get("SubnetId")
+            if subnet_id:
+                explicit[subnet_id] = table
+    subnets = _aws_json([
+        "ec2",
+        "describe-subnets",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        "--query",
+        "Subnets[*].SubnetId",
+    ], default=[]) or []
+    private = []
+    for subnet_id in subnets:
+        table = explicit.get(subnet_id, main_table)
+        if table and not _route_table_has_igw(table):
+            private.append(subnet_id)
+    return private
+
+
+def _existing_endpoint_services(vpc_id, region):
+    services = _aws_json([
+        "ec2",
+        "describe-vpc-endpoints",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        "--query",
+        "VpcEndpoints[?State!='deleted'].ServiceName",
+    ], default=[]) or []
+    return set(services)
+
+
+def _ensure_endpoint_sg(vpc_id, vpc_name, vpc_cidr, region):
+    sg_name = f"{vpc_name}-vpce-sg"
+    existing = _aws_text([
+        "ec2",
+        "describe-security-groups",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        f"Name=tag:Name,Values={sg_name}",
+        "--query",
+        "SecurityGroups[0].GroupId",
+    ])
+    if existing:
+        return existing
+    sg_id = _aws_text([
+        "ec2",
+        "create-security-group",
+        *_region_arg(region),
+        "--group-name",
+        sg_name,
+        "--description",
+        "VPC Endpoints",
+        "--vpc-id",
+        vpc_id,
+        "--tag-specifications",
+        f"ResourceType=security-group,Tags=[{{Key=Name,Value={sg_name}}}]",
+        "--query",
+        "GroupId",
+    ])
+    if not sg_id:
+        return ""
+    _aws_ok(["ec2", "authorize-security-group-ingress", *_region_arg(region), "--group-id", sg_id, "--protocol", "-1", "--cidr", vpc_cidr])
+    return sg_id
+
+
+def _ensure_log_bucket(bucket, region):
+    if _aws_ok(["s3api", "head-bucket", "--bucket", bucket]):
+        return True
+    args = ["s3api", "create-bucket", "--bucket", bucket]
+    if region != "us-east-1":
+        args.extend(["--create-bucket-configuration", f"LocationConstraint={region}"])
+    if not _aws_ok(args):
+        return False
+    _aws_ok([
+        "s3api",
+        "put-public-access-block",
+        "--bucket",
+        bucket,
+        "--public-access-block-configuration",
+        "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+    ])
+    return True
+
+
+def _setup_vpc(vpc_id, region, account_id):
+    vpc_name = _vpc_name(vpc_id, region)
+    vpc_cidr = _vpc_cidr(vpc_id, region)
+    if not vpc_cidr:
+        _print_job_event(f"{vpc_id}: could not read CIDR; skipping")
+        return
+
+    _print_job_event(f"{vpc_id}: configuring endpoints and flow logs")
+    route_table_ids = _all_route_table_ids(vpc_id, region)
+    existing = _existing_endpoint_services(vpc_id, region)
+
+    for short in GATEWAY_ENDPOINTS:
+        service = f"com.amazonaws.{region}.{short}"
+        if service in existing:
+            _print_job_event(f"{vpc_id}: gateway endpoint {short} already exists")
+            continue
+        if not route_table_ids:
+            _print_job_event(f"{vpc_id}: no route tables; skipping gateway endpoint {short}")
+            continue
+        result = _aws_call([
+            "ec2",
+            "create-vpc-endpoint",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--service-name",
+            service,
+            "--vpc-endpoint-type",
+            "Gateway",
+            "--route-table-ids",
+            *route_table_ids,
+            "--tag-specifications",
+            f"ResourceType=vpc-endpoint,Tags=[{{Key=Name,Value={vpc_name}-vpce-{short}}}]",
+        ])
+        _print_job_event(f"{vpc_id}: {'created' if result['ok'] else 'failed'} gateway endpoint {short}")
+
+    private_subnets = _private_subnet_ids(vpc_id, region)
+    sg_id = _ensure_endpoint_sg(vpc_id, vpc_name, vpc_cidr, region) if private_subnets else ""
+    for short in INTERFACE_ENDPOINTS:
+        service = f"com.amazonaws.{region}.{short}"
+        if service in existing:
+            _print_job_event(f"{vpc_id}: interface endpoint {short} already exists")
+            continue
+        if not private_subnets or not sg_id:
+            _print_job_event(f"{vpc_id}: skipping interface endpoint {short}; private subnets or security group unavailable")
+            continue
+        result = _aws_call([
+            "ec2",
+            "create-vpc-endpoint",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--service-name",
+            service,
+            "--vpc-endpoint-type",
+            "Interface",
+            "--subnet-ids",
+            *private_subnets,
+            "--security-group-ids",
+            sg_id,
+            "--private-dns-enabled",
+            "--tag-specifications",
+            f"ResourceType=vpc-endpoint,Tags=[{{Key=Name,Value={vpc_name}-vpce-{short}}}]",
+        ])
+        _print_job_event(f"{vpc_id}: {'created' if result['ok'] else 'failed'} interface endpoint {short}")
+
+    existing_flowlog = _aws_text([
+        "ec2",
+        "describe-flow-logs",
+        *_region_arg(region),
+        "--filter",
+        f"Name=resource-id,Values={vpc_id}",
+        "Name=log-destination-type,Values=s3",
+        "--query",
+        "FlowLogs[0].FlowLogId",
+    ])
+    if existing_flowlog:
+        _print_job_event(f"{vpc_id}: S3 flow logs already enabled")
+        return
+    bucket = f"logbucket-{account_id}"
+    if not _ensure_log_bucket(bucket, region):
+        _print_job_event(f"{vpc_id}: could not ensure flow-log bucket {bucket}")
+        return
+    result = _aws_call([
+        "ec2",
+        "create-flow-logs",
+        *_region_arg(region),
+        "--resource-ids",
+        vpc_id,
+        "--resource-type",
+        "VPC",
+        "--traffic-type",
+        "ALL",
+        "--log-destination-type",
+        "s3",
+        "--log-destination",
+        f"arn:aws:s3:::{bucket}",
+    ])
+    _print_job_event(f"{vpc_id}: {'enabled' if result['ok'] else 'failed to enable'} S3 flow logs")
+
+
+def _run_vpc_fix_job(args):
+    paths = _vpc_job_paths(args.job_id)
+    state = _read_json(paths["state"])
+    state["status"] = "RUNNING"
+    state["runner_pid"] = os.getpid()
+    state.setdefault("started_at", _utc_now())
+    _write_json(paths["state"], state)
+
+    with paths["stdout"].open("w", encoding="utf-8") as stdout, paths["stderr"].open("w", encoding="utf-8") as stderr:
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stdout, stderr
+        try:
+            region = _detect_region(args.region)
+            if not region:
+                raise RuntimeError("could not determine AWS region")
+            account_id = _aws_text(["sts", "get-caller-identity", "--query", "Account"])
+            if not account_id:
+                raise RuntimeError("could not determine AWS account ID")
+            vpc_ids = args.vpc_ids.split(",") if args.vpc_ids else _all_vpc_ids(region)
+            for vpc_id in [item.strip() for item in vpc_ids if item.strip()]:
+                _setup_vpc(vpc_id, region, account_id)
+            state["status"] = "SUCCEEDED"
+            state["completed_at"] = _utc_now()
+            state["region"] = region
+            state["vpc_ids"] = ",".join(vpc_ids)
+            _write_json(paths["state"], state)
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr, flush=True)
+            state["status"] = "FAILED"
+            state["completed_at"] = _utc_now()
+            state["error"] = str(exc)
+            _write_json(paths["state"], state)
+            return 1
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "_run-inspect-job":
         run_parser = NoColorArgumentParser(prog="aws utils _run-inspect-job")
@@ -407,6 +932,14 @@ def main():
         run_parser.add_argument("bptools_args", nargs=argparse.REMAINDER)
         return _run_inspect_job(run_parser.parse_args())
 
+    if len(sys.argv) > 1 and sys.argv[1] == "_run-vpc-fix-job":
+        run_parser = NoColorArgumentParser(prog="aws utils _run-vpc-fix-job")
+        run_parser.add_argument("command")
+        run_parser.add_argument("job_id")
+        run_parser.add_argument("--vpc-ids")
+        run_parser.add_argument("--region")
+        return _run_vpc_fix_job(run_parser.parse_args())
+
     if any(arg in {"help", "--help", "-h"} for arg in sys.argv[1:]):
         code = _show_help(sys.argv[1:])
         if code is not None:
@@ -415,6 +948,21 @@ def main():
     parser = NoColorArgumentParser(prog="aws utils", add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True, parser_class=NoColorArgumentParser)
     subparsers.add_parser("hello", help="Print a friendly greeting.", add_help=False)
+
+    cloudwatch_parser = subparsers.add_parser("cloudwatch", help="CloudWatch utility commands.", add_help=False)
+    cloudwatch_subparsers = cloudwatch_parser.add_subparsers(
+        dest="cloudwatch_command",
+        required=True,
+        parser_class=NoColorArgumentParser,
+    )
+    dashboard_parser = cloudwatch_subparsers.add_parser(
+        "create-dashboard",
+        help="Create AWSUtils CloudWatch dashboards.",
+        add_help=False,
+    )
+    dashboard_parser.add_argument("--dashboard", choices=("full", "simple", "all"), default="all")
+    dashboard_parser.add_argument("--name", help="Dashboard name. With --dashboard all, the dashboard type is appended.")
+    dashboard_parser.add_argument("--base-url", default=DEFAULT_ASSET_BASE_URL, help="Base URL for dashboard JSON assets.")
 
     inspect_parser = subparsers.add_parser("inspect", help="Run AWS best-practice inspections.", add_help=False)
     inspect_subparsers = inspect_parser.add_subparsers(
@@ -441,14 +989,40 @@ def main():
     )
     describe_parser.add_argument("--job-id", help="Inspection job ID returned by create-inspect-job. Omit to list all jobs.")
 
+    vpc_parser = subparsers.add_parser("vpc", help="VPC utility commands.", add_help=False)
+    vpc_subparsers = vpc_parser.add_subparsers(
+        dest="vpc_command",
+        required=True,
+        parser_class=NoColorArgumentParser,
+    )
+    vpc_create_parser = vpc_subparsers.add_parser(
+        "create-fix-job",
+        help="Create a background VPC endpoint and flow-log fix job.",
+        add_help=False,
+    )
+    vpc_create_parser.add_argument("--vpc-ids", help="Comma-separated VPC IDs. Defaults to every VPC in the region.")
+    vpc_create_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
+    vpc_describe_parser = vpc_subparsers.add_parser(
+        "describe-fix-job",
+        help="Describe VPC fix jobs as JSON.",
+        add_help=False,
+    )
+    vpc_describe_parser.add_argument("--job-id", help="VPC fix job ID returned by create-fix-job. Omit to list all jobs.")
+
     args = parser.parse_args()
     if args.command == "hello":
         print("Hello from aws utils!")
         return 0
+    if args.command == "cloudwatch" and args.cloudwatch_command == "create-dashboard":
+        return _create_cloudwatch_dashboard(args)
     if args.command == "inspect" and args.inspect_command == "create-inspect-job":
         return _create_inspect_job(args)
     if args.command == "inspect" and args.inspect_command == "describe-inspect-job":
         return _describe_inspect_job(args)
+    if args.command == "vpc" and args.vpc_command == "create-fix-job":
+        return _create_vpc_fix_job(args)
+    if args.command == "vpc" and args.vpc_command == "describe-fix-job":
+        return _describe_vpc_fix_job(args)
 
     parser.error(f"unknown command: {args.command}")
     return 2
