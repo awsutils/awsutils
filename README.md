@@ -8,6 +8,11 @@ aws utils cloudwatch create-dashboard
 aws utils inspect create-inspect-job
 aws utils inspect describe-inspect-job --job-id <job-id>
 aws utils inspect describe-inspect-job
+aws utils logs create-fix-job
+aws utils logs describe-fix-job --job-id <job-id>
+aws utils s3 create-log-bucket
+aws utils s3 create-fix-job
+aws utils s3 describe-fix-job --job-id <job-id>
 aws utils vpc create-fix-job
 aws utils vpc describe-fix-job --job-id <job-id>
 ```
@@ -69,6 +74,29 @@ aws utils inspect create-inspect-job --concurrency 8 --no-prefetch
 
 `describe-inspect-job` always returns JSON. If `bptools` emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
 
+## CloudWatch Logs Fix Jobs
+
+Start a background job that applies tags, enables native log-group deletion protection, and sets retention to 7 days for every CloudWatch Logs log group in the current region:
+
+```sh
+aws utils logs create-fix-job
+```
+
+Customize region, retention, tags, or parallelism:
+
+```sh
+aws utils logs create-fix-job --region us-east-1
+aws utils logs create-fix-job --retention-days 14 --tag Environment=prod --tag Owner=platform
+aws utils logs create-fix-job --max-workers 16
+```
+
+Describe a job or list all known jobs:
+
+```sh
+aws utils logs describe-fix-job --job-id <job-id>
+aws utils logs describe-fix-job
+```
+
 ## CloudWatch Dashboards
 
 Create the bundled full and simple dashboards:
@@ -87,9 +115,32 @@ aws utils cloudwatch create-dashboard --dashboard full --name my-dashboard
 aws utils cloudwatch create-dashboard --max-workers 2
 ```
 
+## S3 Utilities
+
+Create or update the shared log bucket used for VPC Flow Logs, ALB access logs, and S3 server access logs:
+
+```sh
+aws utils s3 create-log-bucket
+aws utils s3 create-log-bucket --bucket logbucket-123456789012 --region us-east-1
+```
+
+Start a background job that fixes all existing S3 buckets by enabling versioning, tagging, intelligent tiering, lifecycle policy, required bucket policy, and server access logging to the shared log bucket:
+
+```sh
+aws utils s3 create-fix-job
+aws utils s3 create-fix-job --log-bucket logbucket-123456789012 --tag Environment=prod
+```
+
+Describe a job or list all known jobs:
+
+```sh
+aws utils s3 describe-fix-job --job-id <job-id>
+aws utils s3 describe-fix-job
+```
+
 ## VPC Fix Jobs
 
-Start a background job that repairs missing VPC networking components, enables common VPC endpoints, and enables S3 VPC Flow Logs for every VPC in the current region:
+Start a background job that repairs missing VPC networking components, enables common VPC endpoints, and enables S3 VPC Flow Logs to the shared S3 log bucket for every VPC in the current region:
 
 ```sh
 aws utils vpc create-fix-job

@@ -9,6 +9,8 @@ import time
 import uuid
 from pathlib import Path
 
+from awsutils.s3 import ensure_log_bucket as ensure_s3_log_bucket
+
 INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
 VPC_JOBS_DIR = INSTALL_ROOT / "vpc" / "jobs"
 GATEWAY_ENDPOINTS = ("s3", "dynamodb")
@@ -626,25 +628,6 @@ def _ensure_endpoint_sg(vpc_id, vpc_name, vpc_cidr, region):
     return sg_id
 
 
-def _ensure_log_bucket(bucket, region):
-    if _aws_ok(["s3api", "head-bucket", "--bucket", bucket]):
-        return True
-    args = ["s3api", "create-bucket", "--bucket", bucket]
-    if region != "us-east-1":
-        args.extend(["--create-bucket-configuration", f"LocationConstraint={region}"])
-    if not _aws_ok(args):
-        return False
-    _aws_ok([
-        "s3api",
-        "put-public-access-block",
-        "--bucket",
-        bucket,
-        "--public-access-block-configuration",
-        "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
-    ])
-    return True
-
-
 def _setup_vpc(vpc_id, region, account_id, max_workers):
     vpc_name = _vpc_name(vpc_id, region)
     vpc_cidr = _vpc_cidr(vpc_id, region)
@@ -733,8 +716,9 @@ def _setup_vpc(vpc_id, region, account_id, max_workers):
     if existing_flowlog:
         _print_job_event(f"{vpc_id}: S3 flow logs already enabled")
         return
-    bucket = f"logbucket-{account_id}"
-    if not _ensure_log_bucket(bucket, region):
+    log_bucket = ensure_s3_log_bucket(region=region, account_id=account_id)
+    bucket = log_bucket["bucket"]
+    if not log_bucket["ok"]:
         _print_job_event(f"{vpc_id}: could not ensure flow-log bucket {bucket}")
         return
     result = _aws_call([

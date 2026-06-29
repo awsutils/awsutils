@@ -12,6 +12,8 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 from awsutils.cloudwatch import DEFAULT_ASSET_BASE_URL, create_cloudwatch_dashboard
+from awsutils.logs import DEFAULT_RETENTION_DAYS, create_logs_fix_job, describe_logs_fix_job, run_logs_fix_job
+from awsutils.s3 import create_log_bucket, create_s3_fix_job, describe_s3_fix_job, run_s3_fix_job
 from awsutils.vpc import create_vpc_fix_job, describe_vpc_fix_job, run_vpc_fix_job
 
 
@@ -54,6 +56,10 @@ AVAILABLE COMMANDS
      * cloudwatch
 
      * inspect
+
+     * logs
+
+     * s3
 
      * vpc
 """)
@@ -148,6 +154,105 @@ SYNOPSIS
 OPTIONS
      --job-id (string)
           Inspection job ID returned by create-inspect-job. Omit to list all jobs.
+""")
+        return 0
+    if topic == ["logs"]:
+        print("""NAME
+     logs - CloudWatch Logs utility commands
+
+DESCRIPTION
+     Start and describe background CloudWatch Logs fix jobs.
+
+SYNOPSIS
+     aws utils logs <command> [parameters]
+
+AVAILABLE COMMANDS
+     * create-fix-job
+
+     * describe-fix-job
+""")
+        return 0
+    if topic == ["logs", "create-fix-job"]:
+        print("""NAME
+     create-fix-job - Create a CloudWatch Logs fix job
+
+DESCRIPTION
+     Starts a background job that applies tags, enables log-group deletion
+     protection, and sets retention for every CloudWatch Logs log group.
+
+SYNOPSIS
+     aws utils logs create-fix-job
+          [--region <value>]
+          [--retention-days <value>]
+          [--tag Key=Value]
+          [--max-workers <value>]
+""")
+        return 0
+    if topic == ["logs", "describe-fix-job"]:
+        print("""NAME
+     describe-fix-job - Describe CloudWatch Logs fix jobs
+
+SYNOPSIS
+     aws utils logs describe-fix-job
+          [--job-id <value>]
+""")
+        return 0
+    if topic == ["s3"]:
+        print("""NAME
+     s3 - S3 utility commands
+
+DESCRIPTION
+     Create shared log buckets and start S3 bucket fix jobs.
+
+SYNOPSIS
+     aws utils s3 <command> [parameters]
+
+AVAILABLE COMMANDS
+     * create-log-bucket
+
+     * create-fix-job
+
+     * describe-fix-job
+""")
+        return 0
+    if topic == ["s3", "create-log-bucket"]:
+        print("""NAME
+     create-log-bucket - Create an S3 log bucket
+
+DESCRIPTION
+     Creates or updates a shared S3 log bucket and bucket policy allowing VPC
+     Flow Logs, ALB access logs, and S3 server access logs delivery.
+
+SYNOPSIS
+     aws utils s3 create-log-bucket
+          [--bucket <value>]
+          [--region <value>]
+""")
+        return 0
+    if topic == ["s3", "create-fix-job"]:
+        print("""NAME
+     create-fix-job - Create an S3 bucket fix job
+
+DESCRIPTION
+     Starts a background job that enables versioning, tags, intelligent tiering,
+     lifecycle policy, required bucket policy, and server access logging for all
+     existing S3 buckets.
+
+SYNOPSIS
+     aws utils s3 create-fix-job
+          [--region <value>]
+          [--log-bucket <value>]
+          [--tag Key=Value]
+          [--max-workers <value>]
+""")
+        return 0
+    if topic == ["s3", "describe-fix-job"]:
+        print("""NAME
+     describe-fix-job - Describe S3 fix jobs
+
+SYNOPSIS
+     aws utils s3 describe-fix-job
+          [--job-id <value>]
 """)
         return 0
     if topic == ["vpc"]:
@@ -490,6 +595,26 @@ def main():
         run_parser.add_argument("--max-workers", type=int, default=8)
         return run_vpc_fix_job(run_parser.parse_args())
 
+    if len(sys.argv) > 1 and sys.argv[1] == "_run-logs-fix-job":
+        run_parser = NoColorArgumentParser(prog="aws utils _run-logs-fix-job")
+        run_parser.add_argument("command")
+        run_parser.add_argument("job_id")
+        run_parser.add_argument("--region")
+        run_parser.add_argument("--retention-days", type=int, default=DEFAULT_RETENTION_DAYS)
+        run_parser.add_argument("--tag", action="append", default=[])
+        run_parser.add_argument("--max-workers", type=int, default=8)
+        return run_logs_fix_job(run_parser.parse_args())
+
+    if len(sys.argv) > 1 and sys.argv[1] == "_run-s3-fix-job":
+        run_parser = NoColorArgumentParser(prog="aws utils _run-s3-fix-job")
+        run_parser.add_argument("command")
+        run_parser.add_argument("job_id")
+        run_parser.add_argument("--region")
+        run_parser.add_argument("--log-bucket")
+        run_parser.add_argument("--tag", action="append", default=[])
+        run_parser.add_argument("--max-workers", type=int, default=8)
+        return run_s3_fix_job(run_parser.parse_args())
+
     if any(arg in {"help", "--help", "-h"} for arg in sys.argv[1:]):
         code = _show_help(sys.argv[1:])
         if code is not None:
@@ -540,6 +665,57 @@ def main():
     )
     describe_parser.add_argument("--job-id", help="Inspection job ID returned by create-inspect-job. Omit to list all jobs.")
 
+    logs_parser = subparsers.add_parser("logs", help="CloudWatch Logs utility commands.", add_help=False)
+    logs_subparsers = logs_parser.add_subparsers(
+        dest="logs_command",
+        required=True,
+        parser_class=NoColorArgumentParser,
+    )
+    logs_create_parser = logs_subparsers.add_parser(
+        "create-fix-job",
+        help="Create a background CloudWatch Logs fix job.",
+        add_help=False,
+    )
+    logs_create_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
+    logs_create_parser.add_argument("--retention-days", type=int, default=DEFAULT_RETENTION_DAYS, help="Log retention in days. Defaults to 7.")
+    logs_create_parser.add_argument("--tag", action="append", default=[], help="Tag to apply as Key=Value. May be repeated.")
+    logs_create_parser.add_argument("--max-workers", type=int, default=8, help="Maximum parallel log group operations.")
+    logs_describe_parser = logs_subparsers.add_parser(
+        "describe-fix-job",
+        help="Describe CloudWatch Logs fix jobs as JSON.",
+        add_help=False,
+    )
+    logs_describe_parser.add_argument("--job-id", help="Logs fix job ID returned by create-fix-job. Omit to list all jobs.")
+
+    s3_parser = subparsers.add_parser("s3", help="S3 utility commands.", add_help=False)
+    s3_subparsers = s3_parser.add_subparsers(
+        dest="s3_command",
+        required=True,
+        parser_class=NoColorArgumentParser,
+    )
+    s3_log_bucket_parser = s3_subparsers.add_parser(
+        "create-log-bucket",
+        help="Create or update a shared S3 log bucket.",
+        add_help=False,
+    )
+    s3_log_bucket_parser.add_argument("--bucket", help="Log bucket name. Defaults to logbucket-<account-id>.")
+    s3_log_bucket_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
+    s3_create_parser = s3_subparsers.add_parser(
+        "create-fix-job",
+        help="Create a background S3 bucket fix job.",
+        add_help=False,
+    )
+    s3_create_parser.add_argument("--region", help="AWS region for creating the log bucket. Defaults to AWS CLI configuration/environment.")
+    s3_create_parser.add_argument("--log-bucket", help="Log bucket name. Defaults to logbucket-<account-id>.")
+    s3_create_parser.add_argument("--tag", action="append", default=[], help="Tag to apply as Key=Value. May be repeated.")
+    s3_create_parser.add_argument("--max-workers", type=int, default=8, help="Maximum parallel bucket operations.")
+    s3_describe_parser = s3_subparsers.add_parser(
+        "describe-fix-job",
+        help="Describe S3 fix jobs as JSON.",
+        add_help=False,
+    )
+    s3_describe_parser.add_argument("--job-id", help="S3 fix job ID returned by create-fix-job. Omit to list all jobs.")
+
     vpc_parser = subparsers.add_parser("vpc", help="VPC utility commands.", add_help=False)
     vpc_subparsers = vpc_parser.add_subparsers(
         dest="vpc_command",
@@ -571,6 +747,16 @@ def main():
         return _create_inspect_job(args)
     if args.command == "inspect" and args.inspect_command == "describe-inspect-job":
         return _describe_inspect_job(args)
+    if args.command == "logs" and args.logs_command == "create-fix-job":
+        return create_logs_fix_job(args)
+    if args.command == "logs" and args.logs_command == "describe-fix-job":
+        return describe_logs_fix_job(args)
+    if args.command == "s3" and args.s3_command == "create-log-bucket":
+        return create_log_bucket(args)
+    if args.command == "s3" and args.s3_command == "create-fix-job":
+        return create_s3_fix_job(args)
+    if args.command == "s3" and args.s3_command == "describe-fix-job":
+        return describe_s3_fix_job(args)
     if args.command == "vpc" and args.vpc_command == "create-fix-job":
         return create_vpc_fix_job(args)
     if args.command == "vpc" and args.vpc_command == "describe-fix-job":
