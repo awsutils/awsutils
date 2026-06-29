@@ -903,13 +903,14 @@ def _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, regi
     return rt_id
 
 
-def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, region):
+def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, az, region):
     natgw_id = _aws_text([
         "ec2",
         "describe-nat-gateways",
         *_region_arg(region),
         "--filter",
         f"Name=vpc-id,Values={vpc_id}",
+        f"Name=subnet-id,Values={public_subnet_id}",
         "Name=state,Values=available,pending",
         "--query",
         "NatGateways[0].NatGatewayId",
@@ -924,7 +925,7 @@ def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, region):
         "--domain",
         "vpc",
         "--tag-specifications",
-        f"ResourceType=elastic-ip,Tags=[{{Key=Name,Value={vpc_name}-nat-eip}}]",
+        f"ResourceType=elastic-ip,Tags=[{{Key=Name,Value={vpc_name}-nat-eip-{az}}}]",
         "--query",
         "AllocationId",
     ])
@@ -939,16 +940,16 @@ def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, region):
         "--allocation-id",
         alloc_id,
         "--tag-specifications",
-        f"ResourceType=natgateway,Tags=[{{Key=Name,Value={vpc_name}-natgw}}]",
+        f"ResourceType=natgateway,Tags=[{{Key=Name,Value={vpc_name}-natgw-{az}}}]",
         "--query",
         "NatGateway.NatGatewayId",
     ])
     if not natgw_id:
         return ""
-    _print_job_event(f"{vpc_id}: creating NAT gateway {natgw_id}")
+    _print_job_event(f"{vpc_id}: creating NAT gateway {natgw_id} in {az}")
     if not _aws_ok(["ec2", "wait", "nat-gateway-available", *_region_arg(region), "--nat-gateway-ids", natgw_id]):
         return ""
-    _print_job_event(f"{vpc_id}: NAT gateway available {natgw_id}")
+    _print_job_event(f"{vpc_id}: NAT gateway available {natgw_id} in {az}")
     return natgw_id
 
 
@@ -1027,11 +1028,17 @@ def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
         _print_job_event(f"{vpc_id}: at least two public and two private subnets are required; skipping NAT route repair")
         return
 
-    natgw_id = _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_ids[0], region)
-    if not natgw_id:
-        _print_job_event(f"{vpc_id}: could not ensure NAT gateway; skipping private route repair")
-        return
-    _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, region)
+    for az in target_azs:
+        public_in_az = _subnets_in_az(public_subnet_ids, subnet_by_id, az)
+        private_in_az = _subnets_in_az(private_subnet_ids, subnet_by_id, az)
+        if not public_in_az or not private_in_az:
+            _print_job_event(f"{vpc_id}: missing public or private subnet in {az}; skipping NAT route repair for AZ")
+            continue
+        natgw_id = _ensure_nat_gateway(vpc_id, vpc_name, public_in_az[0], az, region)
+        if not natgw_id:
+            _print_job_event(f"{vpc_id}: could not ensure NAT gateway in {az}; skipping private route repair for AZ")
+            continue
+        _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_in_az, region)
 
 
 def _private_subnet_ids(vpc_id, region):
