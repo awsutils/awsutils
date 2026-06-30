@@ -16,6 +16,16 @@ RETRY_ATTEMPTS = 5
 DEFAULT_TAGS = {
     "ManagedBy": "awsutils",
 }
+INTELLIGENT_TIERING_ID = "awsutils-default"
+
+
+def _intelligent_tiering_config(days_and_tiers):
+    return {
+        "Id": INTELLIGENT_TIERING_ID,
+        "Status": "Enabled",
+        "Filter": {"Prefix": ""},
+        "Tierings": days_and_tiers,
+    }
 
 
 def _json_dump(data):
@@ -291,25 +301,38 @@ def _put_bucket_tags(bucket, tags):
 
 
 def _put_intelligent_tiering(bucket):
-    config = {
-        "Id": "awsutils-default",
-        "Status": "Enabled",
-        "Filter": {"Prefix": ""},
-        "Tierings": [
+    full_config = _intelligent_tiering_config(
+        [
             {"Days": 90, "AccessTier": "ARCHIVE_ACCESS"},
             {"Days": 180, "AccessTier": "DEEP_ARCHIVE_ACCESS"},
-        ],
-    }
-    return _aws_ok([
-        "s3api",
-        "put-bucket-intelligent-tiering-configuration",
-        "--bucket",
-        bucket,
-        "--id",
-        "awsutils-default",
-        "--intelligent-tiering-configuration",
-        json.dumps(config),
-    ])
+        ]
+    )
+    archive_only_config = _intelligent_tiering_config([{"Days": 90, "AccessTier": "ARCHIVE_ACCESS"}])
+
+    def _put(config):
+        proc = _run_command([
+            "aws",
+            "s3api",
+            "put-bucket-intelligent-tiering-configuration",
+            "--bucket",
+            bucket,
+            "--id",
+            INTELLIGENT_TIERING_ID,
+            "--intelligent-tiering-configuration",
+            json.dumps(config),
+        ], retries=RETRY_ATTEMPTS)
+        if proc.returncode == 0:
+            return True
+        message = proc.stderr.strip()
+        if message:
+            _print_job_event(f"{bucket}: intelligent-tiering configuration update failed: {message}")
+        return False
+
+    if _put(full_config):
+        return True
+
+    _print_job_event(f"{bucket}: falling back to archive-only intelligent-tiering")
+    return _put(archive_only_config)
 
 
 def _put_lifecycle(bucket):

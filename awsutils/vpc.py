@@ -601,13 +601,38 @@ def _private_subnet_ids(vpc_id, region):
         "--filters",
         f"Name=vpc-id,Values={vpc_id}",
         "--query",
-        "Subnets[*].SubnetId",
+        "Subnets",
     ], default=[]) or []
     private = []
-    for subnet_id in subnets:
+    for subnet in subnets:
+        subnet_id = subnet.get("SubnetId") if isinstance(subnet, dict) else None
+        if not subnet_id:
+            continue
         table = explicit.get(subnet_id, main_table)
         if table and not _route_table_has_igw(table):
             private.append(subnet_id)
+
+    if not private:
+        for subnet in subnets:
+            subnet_id = subnet.get("SubnetId") if isinstance(subnet, dict) else None
+            if not subnet_id:
+                continue
+            is_private_tag = False
+            for tag in subnet.get("Tags", []):
+                if tag.get("Key", "").lower() == "tier" and str(tag.get("Value", "")).lower() == "private":
+                    is_private_tag = True
+                    break
+            if is_private_tag and subnet_id not in private:
+                private.append(subnet_id)
+
+    if not private:
+        for subnet in subnets:
+            subnet_id = subnet.get("SubnetId") if isinstance(subnet, dict) else None
+            if subnet_id:
+                private.append(subnet_id)
+
+    if not private:
+        _print_job_event(f"{vpc_id}: could not discover private subnets for interface endpoints")
     return private
 
 
