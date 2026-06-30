@@ -19,13 +19,15 @@ DEFAULT_TAGS = {
 INTELLIGENT_TIERING_ID = "awsutils-default"
 
 
-def _intelligent_tiering_config(days_and_tiers):
-    return {
+def _intelligent_tiering_config(days_and_tiers, filter_prefix=None):
+    config = {
         "Id": INTELLIGENT_TIERING_ID,
         "Status": "Enabled",
-        "Filter": {"Prefix": ""},
         "Tierings": days_and_tiers,
     }
+    if filter_prefix is not None:
+        config["Filter"] = {"Prefix": filter_prefix}
+    return config
 
 
 def _json_dump(data):
@@ -301,13 +303,13 @@ def _put_bucket_tags(bucket, tags):
 
 
 def _put_intelligent_tiering(bucket):
-    full_config = _intelligent_tiering_config(
-        [
-            {"Days": 90, "AccessTier": "ARCHIVE_ACCESS"},
-            {"Days": 180, "AccessTier": "DEEP_ARCHIVE_ACCESS"},
-        ]
-    )
-    archive_only_config = _intelligent_tiering_config([{"Days": 90, "AccessTier": "ARCHIVE_ACCESS"}])
+    full_config = _intelligent_tiering_config([
+        {"Days": 90, "AccessTier": "ARCHIVE_ACCESS"},
+        {"Days": 180, "AccessTier": "DEEP_ARCHIVE_ACCESS"},
+    ])
+    archive_only_config = _intelligent_tiering_config([
+        {"Days": 90, "AccessTier": "ARCHIVE_ACCESS"},
+    ])
 
     def _put(config):
         proc = _run_command([
@@ -366,7 +368,7 @@ def _fix_bucket(bucket, log_bucket, tags):
     tiering_ok = _put_intelligent_tiering(bucket)
     lifecycle_ok = _put_lifecycle(bucket)
     policy_ok = _put_merged_bucket_policy(bucket, [_deny_insecure_transport_statement(bucket)])
-    logging_ok = True if bucket == log_bucket else _put_server_logging(bucket, log_bucket)
+    logging_ok = _put_server_logging(bucket, log_bucket)
     ok = versioning_ok and tagging_ok and tiering_ok and lifecycle_ok and policy_ok and logging_ok
     _print_job_event(
         f"{bucket}: {'fixed' if ok else 'failed'} versioning={versioning_ok} tags={tagging_ok} "

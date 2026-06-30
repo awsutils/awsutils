@@ -349,6 +349,51 @@ def _ensure_igw(vpc_id, vpc_name, region):
     return igw_id
 
 
+def _vpc_dns_enabled(vpc_id, region, attribute):
+    attr_key = "EnableDnsSupport" if attribute == "enableDnsSupport" else "EnableDnsHostnames"
+    value = _aws_text([
+        "ec2",
+        "describe-vpc-attribute",
+        *_region_arg(region),
+        "--vpc-id",
+        vpc_id,
+        "--attribute",
+        attribute,
+        "--query",
+        f"{attr_key}.Value",
+    ])
+    return value == "True"
+
+
+def _ensure_vpc_dns_attributes(vpc_id, region):
+    dns_support = _vpc_dns_enabled(vpc_id, region, "enableDnsSupport")
+    if not dns_support:
+        dns_support = _aws_ok([
+            "ec2",
+            "modify-vpc-attribute",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--enable-dns-support",
+        ])
+    dns_hostnames = _vpc_dns_enabled(vpc_id, region, "enableDnsHostnames")
+    if not dns_hostnames:
+        dns_hostnames = _aws_ok([
+            "ec2",
+            "modify-vpc-attribute",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--enable-dns-hostnames",
+        ])
+
+    if not dns_support:
+        _print_job_event(f"{vpc_id}: failed to enable DNS support")
+    if not dns_hostnames:
+        _print_job_event(f"{vpc_id}: failed to enable DNS hostnames")
+    return dns_support and dns_hostnames
+
+
 def _create_subnet(vpc_id, vpc_name, az, cidr, tier, region):
     subnet_id = _aws_text([
         "ec2",
@@ -528,7 +573,7 @@ def _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, az, r
         _print_job_event(f"{vpc_id}: {'replaced' if default_route else 'added'} private default route on {rt_id} for {az}")
 
 
-def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
+def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region, max_workers=8):
     igw_id = _ensure_igw(vpc_id, vpc_name, region)
     if not igw_id:
         _print_job_event(f"{vpc_id}: could not ensure internet gateway; skipping network repair")
@@ -572,17 +617,20 @@ def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
         _print_job_event(f"{vpc_id}: at least two public and two private subnets are required; skipping NAT route repair")
         return
 
-    for az in target_azs:
+    def _fix_az_nat_and_routes(az):
         public_in_az = _subnets_in_az(public_subnet_ids, subnet_by_id, az)
         private_in_az = _subnets_in_az(private_subnet_ids, subnet_by_id, az)
         if not public_in_az or not private_in_az:
             _print_job_event(f"{vpc_id}: missing public or private subnet in {az}; skipping NAT route repair for AZ")
-            continue
+            return False
         natgw_id = _ensure_nat_gateway(vpc_id, vpc_name, public_in_az[0], az, region)
         if not natgw_id:
             _print_job_event(f"{vpc_id}: could not ensure NAT gateway in {az}; skipping private route repair for AZ")
-            continue
+            return False
         _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_in_az, az, region)
+        return True
+
+    _parallel_map(target_azs, _fix_az_nat_and_routes, max_workers=max(1, min(2, max_workers)))
 
 
 def _private_subnet_ids(vpc_id, region):
@@ -692,7 +740,10 @@ def _setup_vpc(vpc_id, region, account_id, max_workers):
         return
 
     _print_job_event(f"{vpc_id}: repairing networking, endpoints, and flow logs")
-    _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region)
+    _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region, max_workers)
+
+    if not _ensure_vpc_dns_attributes(vpc_id, region):
+        _print_job_event(f"{vpc_id}: DNS attributes could not be fully enabled; interface endpoints may fail")
 
     route_table_ids = _all_route_table_ids(vpc_id, region)
     existing = _existing_endpoint_services(vpc_id, region)
@@ -750,7 +801,6 @@ def _setup_vpc(vpc_id, region, account_id, max_workers):
             *private_subnets,
             "--security-group-ids",
             sg_id,
-            "--private-dns-enabled",
             "--tag-specifications",
             f"ResourceType=vpc-endpoint,Tags=[{{Key=Name,Value={vpc_name}-vpce-{short}}}]",
         ])
