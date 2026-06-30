@@ -466,35 +466,66 @@ def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, az, region):
     return natgw_id
 
 
-def _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, region):
+def _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_subnet_ids, az, region):
+    if not private_subnet_ids:
+        return
+
+    desired_name = f"{vpc_name}-private-rt-{az}"
+    rt_id = _aws_text([
+        "ec2",
+        "describe-route-tables",
+        *_region_arg(region),
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+        f"Name=tag:Name,Values={desired_name}",
+        "--query",
+        "RouteTables[0].RouteTableId",
+    ])
+
+    rt_data = {}
+    if rt_id:
+        rt_data = _aws_json([
+            "ec2",
+            "describe-route-tables",
+            *_region_arg(region),
+            "--route-table-ids",
+            rt_id,
+            "--query",
+            "RouteTables[0]",
+        ], default={}) or {}
+        default_route = next((route for route in rt_data.get("Routes", []) if route.get("DestinationCidrBlock") == "0.0.0.0/0"), None)
+        if _route_table_has_igw(rt_data) or not default_route or default_route.get("NatGatewayId") != natgw_id:
+            rt_id = ""
+
+    if not rt_id:
+        rt_id = _aws_text([
+            "ec2",
+            "create-route-table",
+            *_region_arg(region),
+            "--vpc-id",
+            vpc_id,
+            "--tag-specifications",
+            f"ResourceType=route-table,Tags=[{{Key=Name,Value={desired_name}}}]",
+            "--query",
+            "RouteTable.RouteTableId",
+        ])
+        if not rt_id:
+            return
+        _print_job_event(f"{vpc_id}: created private route table {rt_id} for {az}")
+
+    current_rt_ids = {subnet_id: _explicit_route_table_id(subnet_id, region) for subnet_id in private_subnet_ids}
     for subnet_id in private_subnet_ids:
-        tables = _route_tables(vpc_id, region)
-        rt = _effective_route_table(subnet_id, tables)
-        rt_id = rt.get("RouteTableId") if rt else ""
-        if not rt_id or _route_table_has_igw(rt):
-            rt_id = _aws_text([
-                "ec2",
-                "create-route-table",
-                *_region_arg(region),
-                "--vpc-id",
-                vpc_id,
-                "--tag-specifications",
-                f"ResourceType=route-table,Tags=[{{Key=Name,Value={vpc_name}-private-rt}}]",
-                "--query",
-                "RouteTable.RouteTableId",
-            ])
-            if not rt_id:
-                continue
+        if current_rt_ids.get(subnet_id) != rt_id:
             _aws_ok(["ec2", "associate-route-table", *_region_arg(region), "--route-table-id", rt_id, "--subnet-id", subnet_id])
             _print_job_event(f"{vpc_id}: associated private route table {rt_id} with {subnet_id}")
 
-        rt_data = _aws_json(["ec2", "describe-route-tables", *_region_arg(region), "--route-table-ids", rt_id, "--query", "RouteTables[0]"], default={}) or {}
-        default_route = next((route for route in rt_data.get("Routes", []) if route.get("DestinationCidrBlock") == "0.0.0.0/0"), None)
-        if default_route and default_route.get("NatGatewayId") == natgw_id:
-            continue
-        action = "replace-route" if default_route else "create-route"
-        if _aws_ok(["ec2", action, *_region_arg(region), "--route-table-id", rt_id, "--destination-cidr-block", "0.0.0.0/0", "--nat-gateway-id", natgw_id]):
-            _print_job_event(f"{vpc_id}: {'replaced' if default_route else 'added'} private default route on {rt_id}")
+    rt_data = _aws_json(["ec2", "describe-route-tables", *_region_arg(region), "--route-table-ids", rt_id, "--query", "RouteTables[0]"], default={}) or {}
+    default_route = next((route for route in rt_data.get("Routes", []) if route.get("DestinationCidrBlock") == "0.0.0.0/0"), None)
+    if default_route and default_route.get("NatGatewayId") == natgw_id:
+        return
+    action = "replace-route" if default_route else "create-route"
+    if _aws_ok(["ec2", action, *_region_arg(region), "--route-table-id", rt_id, "--destination-cidr-block", "0.0.0.0/0", "--nat-gateway-id", natgw_id]):
+        _print_job_event(f"{vpc_id}: {'replaced' if default_route else 'added'} private default route on {rt_id} for {az}")
 
 
 def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
@@ -551,7 +582,7 @@ def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region):
         if not natgw_id:
             _print_job_event(f"{vpc_id}: could not ensure NAT gateway in {az}; skipping private route repair for AZ")
             continue
-        _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_in_az, region)
+        _ensure_private_routes(vpc_id, vpc_name, natgw_id, private_in_az, az, region)
 
 
 def _private_subnet_ids(vpc_id, region):
