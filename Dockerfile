@@ -14,8 +14,27 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        dnsutils \
+        file \
+        git \
+        iproute2 \
+        iputils-ping \
+        jq \
+        less \
+        lsof \
+        nano \
+        netcat-openbsd \
+        openssh-client \
+        procps \
+        psmisc \
         sudo \
+        tar \
         tini \
+        tree \
+        unzip \
+        vim \
+        wget \
+        zip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \

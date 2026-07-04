@@ -67,7 +67,7 @@ awsutils hello
 aws utils hello
 ```
 
-The web shell runs as the `awsutils` user, which has passwordless `sudo` inside the container.
+The web shell runs as the `awsutils` user, which has passwordless `sudo` inside the container. The image includes common shell tools such as `vim`, `nano`, `wget`, `curl`, `git`, `ssh`, `jq`, `less`, `ping`, `dig`, `nc`, `tar`, `zip`, and `unzip`.
 
 To use local AWS configuration without hiding the container's AWS CLI alias file, mount config and credentials files individually:
 
