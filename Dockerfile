@@ -14,6 +14,7 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        sudo \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -37,7 +38,9 @@ RUN set -eux; \
     rm -f /tmp/ttyd.SHA256SUMS; \
     ttyd --version
 
-RUN useradd --create-home --shell /bin/bash awsutils
+RUN useradd --create-home --shell /bin/bash awsutils \
+    && printf 'awsutils ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/awsutils \
+    && chmod 0440 /etc/sudoers.d/awsutils
 
 WORKDIR /opt/awsutils
 COPY . /opt/awsutils

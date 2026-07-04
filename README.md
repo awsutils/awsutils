@@ -67,6 +67,8 @@ awsutils hello
 aws utils hello
 ```
 
+The web shell runs as the `awsutils` user, which has passwordless `sudo` inside the container.
+
 To use local AWS configuration without hiding the container's AWS CLI alias file, mount config and credentials files individually:
 
 ```sh
