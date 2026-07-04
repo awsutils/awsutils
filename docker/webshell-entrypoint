@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -gt 0 ]]; then
+    exec "$@"
+fi
+
+host="${WEBSHELL_HOST:-0.0.0.0}"
+port="${WEBSHELL_PORT:-8080}"
+shell_bin="${WEBSHELL_SHELL:-/bin/bash}"
+
+ttyd_args=(--writable --interface "$host" --port "$port")
+
+if [[ -n "${WEBSHELL_CREDENTIAL:-}" ]]; then
+    ttyd_args+=(--credential "$WEBSHELL_CREDENTIAL")
+fi
+
+exec ttyd "${ttyd_args[@]}" "$shell_bin"

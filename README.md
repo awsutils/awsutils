@@ -42,6 +42,43 @@ Then run:
 aws utils hello
 ```
 
+## Docker Web Shell
+
+Build an image that includes `awsutils`, AWS CLI, and a browser terminal bound to `0.0.0.0:8080` inside the container:
+
+```sh
+docker build -t awsutils-webshell .
+```
+
+Pushes publish a multi-architecture `linux/amd64` and `linux/arm64` image to `ghcr.io/awsutils/awsutils`.
+
+Run it locally:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e WEBSHELL_CREDENTIAL='admin:change-me' \
+  awsutils-webshell
+```
+
+Open `http://localhost:8080` and run:
+
+```sh
+awsutils hello
+aws utils hello
+```
+
+To use local AWS configuration without hiding the container's AWS CLI alias file, mount config and credentials files individually:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e WEBSHELL_CREDENTIAL='admin:change-me' \
+  -v "$HOME/.aws/config:/home/awsutils/.aws/config:ro" \
+  -v "$HOME/.aws/credentials:/home/awsutils/.aws/credentials:ro" \
+  awsutils-webshell
+```
+
+`WEBSHELL_CREDENTIAL` is optional, but exposing an unauthenticated shell on a reachable interface is unsafe. The container also supports `WEBSHELL_HOST`, `WEBSHELL_PORT`, and `WEBSHELL_SHELL`.
+
 ## Inspect Jobs
 
 Start an AWS best-practice inspection in the background:
