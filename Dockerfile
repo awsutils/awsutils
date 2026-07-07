@@ -24,6 +24,7 @@ RUN apt-get update \
         lsof \
         nano \
         netcat-openbsd \
+        openssh-server \
         openssh-client \
         procps \
         psmisc \
@@ -59,7 +60,15 @@ RUN set -eux; \
 
 RUN useradd --create-home --shell /bin/bash awsutils \
     && printf 'awsutils ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/awsutils \
-    && chmod 0440 /etc/sudoers.d/awsutils
+    && chmod 0440 /etc/sudoers.d/awsutils \
+    && mkdir -p /run/sshd /home/awsutils/.ssh \
+    && chmod 0700 /home/awsutils/.ssh \
+    && printf '%s\n' \
+        'PermitRootLogin no' \
+        'PasswordAuthentication no' \
+        'AllowUsers awsutils' \
+        >/etc/ssh/sshd_config.d/awsutils.conf \
+    && chown -R awsutils:awsutils /home/awsutils/.ssh
 
 WORKDIR /opt/awsutils
 COPY . /opt/awsutils
@@ -72,9 +81,9 @@ RUN python3 -m pip install --no-cache-dir . \
 COPY docker/webshell-entrypoint /usr/local/bin/awsutils-webshell
 RUN chmod 0755 /usr/local/bin/awsutils-webshell
 
-USER awsutils
+USER root
 WORKDIR /home/awsutils
 
-EXPOSE 8080
+EXPOSE 22 8080
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/awsutils-webshell"]
