@@ -7,15 +7,15 @@ if [[ "$(id -u)" -eq 0 ]]; then
     /usr/sbin/sshd -p 22
 
     if [[ -n "${SSHD_AUTHORIZED_KEYS:-}" ]]; then
-        install -d -m 0700 -o awsutils -g awsutils /home/awsutils/.ssh
-        printf '%s\n' "$SSHD_AUTHORIZED_KEYS" >/home/awsutils/.ssh/authorized_keys
-        chown awsutils:awsutils /home/awsutils/.ssh/authorized_keys
-        chmod 0600 /home/awsutils/.ssh/authorized_keys
+        install -d -m 0700 -o ec2-user -g ec2-user /home/ec2-user/.ssh
+        printf '%s\n' "$SSHD_AUTHORIZED_KEYS" >/home/ec2-user/.ssh/authorized_keys
+        chown ec2-user:ec2-user /home/ec2-user/.ssh/authorized_keys
+        chmod 0600 /home/ec2-user/.ssh/authorized_keys
     fi
 fi
 
 if [[ $# -gt 0 ]]; then
-    exec sudo -E -H -u awsutils -- "$@"
+    exec sudo -E -H -u ec2-user -- "$@"
 fi
 
 host="${WEBSHELL_HOST:-0.0.0.0}"
@@ -28,4 +28,4 @@ if [[ -n "${WEBSHELL_CREDENTIAL:-}" ]]; then
     ttyd_args+=(--credential "$WEBSHELL_CREDENTIAL")
 fi
 
-exec sudo -E -H -u awsutils -- ttyd "${ttyd_args[@]}" "$shell_bin"
+exec sudo -E -H -u ec2-user -- ttyd "${ttyd_args[@]}" "$shell_bin"

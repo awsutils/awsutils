@@ -68,15 +68,15 @@ awsutils hello
 aws utils hello
 ```
 
-The web shell runs as the `awsutils` user, which has passwordless `sudo` inside the container. The image also starts `sshd` on container port `22` with password authentication disabled; pass `SSHD_AUTHORIZED_KEYS` or mount `/home/awsutils/.ssh/authorized_keys` to enable SSH login. The image includes common shell tools such as `vim`, `nano`, `wget`, `curl`, `git`, `ssh`, `jq`, `less`, `ping`, `dig`, `nc`, `tar`, `zip`, and `unzip`.
+The web shell runs as the `ec2-user` user, which has passwordless `sudo` inside the container. The image also starts `sshd` on container port `22`; SSH login is enabled for `ec2-user` with an empty password for restricted-network deployments. You can still pass `SSHD_AUTHORIZED_KEYS` or mount `/home/ec2-user/.ssh/authorized_keys` to enable key-based SSH login. The image includes common shell tools such as `vim`, `nano`, `wget`, `curl`, `git`, `ssh`, `jq`, `less`, `ping`, `dig`, `nc`, `tar`, `zip`, and `unzip`.
 
 To use local AWS configuration without hiding the container's AWS CLI alias file, mount config and credentials files individually:
 
 ```sh
 docker run --rm -p 8080:8080 \
   -e WEBSHELL_CREDENTIAL='admin:change-me' \
-  -v "$HOME/.aws/config:/home/awsutils/.aws/config:ro" \
-  -v "$HOME/.aws/credentials:/home/awsutils/.aws/credentials:ro" \
+  -v "$HOME/.aws/config:/home/ec2-user/.aws/config:ro" \
+  -v "$HOME/.aws/credentials:/home/ec2-user/.aws/credentials:ro" \
   awsutils-webshell
 ```
 
