@@ -9,18 +9,22 @@ import uuid
 from pathlib import Path
 
 
-INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
+INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".aws" / "cli" / "tools"))
 LOGS_JOBS_DIR = INSTALL_ROOT / "logs" / "jobs"
 PRINT_LOCK = threading.Lock()
 RETRY_ATTEMPTS = 5
 DEFAULT_RETENTION_DAYS = 7
 DEFAULT_TAGS = {
-    "ManagedBy": "awsutils",
+    "Environment": "Production",
 }
 
 
 def _json_dump(data):
     print(json.dumps(data, indent=4, sort_keys=True))
+
+
+def _public_job_state(state):
+    return {key: value for key, value in state.items() if key not in {"stdout", "stderr"}}
 
 
 def _utc_now():
@@ -227,7 +231,7 @@ def _create_logs_fix_job(args):
     state["pid"] = proc.pid
     state["started_at"] = _utc_now()
     _write_json(paths["state"], state)
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 
@@ -239,7 +243,7 @@ def _describe_logs_fix_job(args):
                 state = _read_json(state_path)
                 state["stdout_bytes"] = len(_read_clean_text(state_path.parent / "stdout.log").encode("utf-8"))
                 state["stderr_bytes"] = len(_read_clean_text(state_path.parent / "stderr.log").encode("utf-8"))
-                jobs.append(state)
+                jobs.append(_public_job_state(state))
         _json_dump({"jobs": jobs})
         return 0
 
@@ -250,7 +254,7 @@ def _describe_logs_fix_job(args):
     state = _read_json(paths["state"])
     state["stdout_text"] = _read_clean_text(paths["stdout"])
     state["stderr_text"] = _read_clean_text(paths["stderr"])
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 

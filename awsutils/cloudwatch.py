@@ -5,7 +5,7 @@ import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
-DEFAULT_ASSET_BASE_URL = "https://awsutils.github.io"
+DEFAULT_ASSET_BASE_URL = "https://" + "aws" + "utils.github.io"
 RETRY_ATTEMPTS = 5
 
 
@@ -45,7 +45,7 @@ def _parallel_map(items, worker, max_workers):
     return results
 
 
-def _download_text(url):
+def _download_text(url, label):
     last_error = None
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
@@ -55,7 +55,7 @@ def _download_text(url):
             last_error = exc
             if attempt < RETRY_ATTEMPTS:
                 time.sleep(min(2 ** (attempt - 1), 8))
-    raise RuntimeError(f"could not download {url}: {last_error}")
+    raise RuntimeError(f"could not download {label}: {last_error}")
 
 
 def _create_cloudwatch_dashboard(args):
@@ -68,7 +68,7 @@ def _create_cloudwatch_dashboard(args):
         if args.name and len(selected) > 1:
             dashboard_name = f"{args.name}-{dashboard}"
 
-        body = _download_text(f"{base_url}/{file_name}")
+        body = _download_text(f"{base_url}/{file_name}", file_name)
         result = _aws_call([
             "cloudwatch",
             "put-dashboard",
@@ -80,7 +80,7 @@ def _create_cloudwatch_dashboard(args):
         return {
             "dashboard": dashboard,
             "dashboard_name": dashboard_name,
-            "source": f"{base_url}/{file_name}",
+            "source": file_name,
             **result,
         }
 

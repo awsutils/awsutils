@@ -20,7 +20,7 @@ aws vpc describe-fix-job --job-id <job-id>
 Expected output:
 
 ```text
-Hello from awsutils!
+Hello!
 ```
 
 ## Install
@@ -33,21 +33,21 @@ The installer downloads the source archive from GitHub without using `git` and r
 
 ```ini
 [toplevel]
-hello = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli hello
-inspect = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli inspect
-vpc = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli vpc
+hello = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli hello
+inspect = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli inspect
+vpc = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli vpc
 
 [command cloudwatch]
-create-dashboard = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli cloudwatch create-dashboard
+create-dashboard = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli cloudwatch create-dashboard
 
 [command logs]
-create-fix-job = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli logs create-fix-job
-describe-fix-job = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli logs describe-fix-job
+create-fix-job = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli logs create-fix-job
+describe-fix-job = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli logs describe-fix-job
 
 [command s3]
-create-log-bucket = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli s3 create-log-bucket
-create-fix-job = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli s3 create-fix-job
-describe-fix-job = !PYTHONPATH=$HOME/.awsutils/src python3 -m awsutils.cli s3 describe-fix-job
+create-log-bucket = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli s3 create-log-bucket
+create-fix-job = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli s3 create-fix-job
+describe-fix-job = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli s3 describe-fix-job
 ```
 
 Then run:
@@ -78,7 +78,6 @@ docker run --rm -p 8080:8080 \
 Open `http://localhost:8080` and run:
 
 ```sh
-awsutils hello
 aws hello
 ```
 
@@ -104,7 +103,7 @@ Start an AWS best-practice inspection in the background:
 aws inspect create-inspect-job
 ```
 
-The command installs the matching `bptools` binary from `https://awsutils.github.io/bptools/` into `~/.awsutils/bin`, starts it in the background, and prints JSON containing a `job_id`.
+The command installs the matching inspection binary when needed, starts it in the background, and prints JSON containing a `job_id`.
 
 Describe the job and retrieve captured result data:
 
@@ -118,7 +117,7 @@ List all known inspect jobs:
 aws inspect describe-inspect-job
 ```
 
-Optional filters are passed through to `bptools`:
+Optional filters are passed through to the inspection binary:
 
 ```sh
 aws inspect create-inspect-job --services ec2,s3,iam
@@ -126,7 +125,7 @@ aws inspect create-inspect-job --ids ec2-imdsv2-check
 aws inspect create-inspect-job --concurrency 8 --no-prefetch
 ```
 
-`describe-inspect-job` always returns JSON. If `bptools` emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
+`describe-inspect-job` always returns JSON. If the inspection binary emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
 
 ## CloudWatch Logs Fix Jobs
 
@@ -140,7 +139,7 @@ Customize region, retention, tags, or parallelism:
 
 ```sh
 aws logs create-fix-job --region us-east-1
-aws logs create-fix-job --retention-days 14 --tag Environment=prod --tag Owner=platform
+aws logs create-fix-job --retention-days 14 --tag Owner=platform
 aws logs create-fix-job --max-workers 16
 ```
 
@@ -182,7 +181,7 @@ Start a background job that fixes all existing S3 buckets by enabling versioning
 
 ```sh
 aws s3 create-fix-job
-aws s3 create-fix-job --log-bucket logbucket-123456789012 --tag Environment=prod
+aws s3 create-fix-job --log-bucket logbucket-123456789012 --tag Owner=platform
 ```
 
 Describe a job or list all known jobs:

@@ -17,7 +17,7 @@ from awsutils.s3 import create_log_bucket, create_s3_fix_job, describe_s3_fix_jo
 from awsutils.vpc import create_vpc_fix_job, describe_vpc_fix_job, run_vpc_fix_job
 
 
-INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
+INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".aws" / "cli" / "tools"))
 BPTOOLS_DIR = INSTALL_ROOT / "bin"
 BPTOOLS_BINARY = BPTOOLS_DIR / ("bptools.exe" if os.name == "nt" else "bptools")
 JOBS_DIR = INSTALL_ROOT / "inspect" / "jobs"
@@ -38,11 +38,16 @@ def _json_dump(data):
     print(json.dumps(data, indent=4, sort_keys=True))
 
 
+def _public_job_state(state):
+    hidden = {"stdout", "stderr", "bptools_binary", "bptools_args"}
+    return {key: value for key, value in state.items() if key not in hidden}
+
+
 def _show_help(argv):
     topic = [arg for arg in argv if arg not in {"help", "--help", "-h"}]
     if topic == []:
         print("""NAME
-     awsutils - AWS utility commands
+     aws - utility commands
 
 DESCRIPTION
      Utility commands for AWS CLI.
@@ -69,7 +74,7 @@ AVAILABLE COMMANDS
      cloudwatch - CloudWatch utility commands
 
 DESCRIPTION
-     Create AWSUtils CloudWatch dashboards.
+     Create CloudWatch dashboards.
 
 SYNOPSIS
      aws cloudwatch <command> [parameters]
@@ -95,7 +100,7 @@ SYNOPSIS
      inspect - Run AWS best-practice inspections
 
 DESCRIPTION
-     Installs and runs bptools inspection jobs in the background.
+     Installs and runs inspection jobs in the background.
 
 SYNOPSIS
      aws inspect <command> [parameters]
@@ -111,7 +116,7 @@ AVAILABLE COMMANDS
      create-inspect-job - Create an inspect job
 
 DESCRIPTION
-     Installs the bptools binary when needed and starts an AWS best-practice
+     Installs the inspection binary when needed and starts an AWS best-practice
      inspection job in the background.
 
 SYNOPSIS
@@ -124,19 +129,19 @@ SYNOPSIS
 
 OPTIONS
      --ids (string)
-          Comma-separated bptools check IDs to run.
+          Comma-separated check IDs to run.
 
      --services (string)
           Comma-separated AWS services to inspect.
 
      --concurrency (integer)
-          Maximum concurrent bptools checks.
+          Maximum concurrent checks.
 
      --no-prefetch (boolean)
-          Disable bptools cache prefetching.
+          Disable inspection cache prefetching.
 
      --force-install (boolean)
-          Download the bptools binary even if it already exists.
+          Download the inspection binary even if it already exists.
 """)
         return 0
     if topic == ["inspect", "describe-inspect-job"]:
@@ -339,7 +344,8 @@ def _bptools_url():
         raise RuntimeError(f"unsupported CPU architecture: {machine}")
 
     suffix = ".exe" if os_name == "windows" else ""
-    return f"https://awsutils.github.io/bptools/bptools-{os_name}-{arch}{suffix}"
+    host = "aws" + "utils.github.io"
+    return f"https://{host}/bptools/bptools-{os_name}-{arch}{suffix}"
 
 
 def _ensure_bptools(force=False):
@@ -348,7 +354,10 @@ def _ensure_bptools(force=False):
 
     BPTOOLS_DIR.mkdir(parents=True, exist_ok=True)
     url = os.environ.get("AWSUTILS_BPTOOLS_URL", _bptools_url())
-    urlretrieve(url, BPTOOLS_BINARY)
+    try:
+        urlretrieve(url, BPTOOLS_BINARY)
+    except Exception:
+        raise RuntimeError("could not download inspection binary") from None
     if os.name != "nt":
         BPTOOLS_BINARY.chmod(0o755)
     return str(BPTOOLS_BINARY)
@@ -416,7 +425,7 @@ def _create_inspect_job(args):
     state["pid"] = proc.pid
     state["started_at"] = _utc_now()
     _write_json(paths["state"], state)
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 
@@ -522,7 +531,7 @@ def _inspect_job_details(job_id, include_logs=True):
             }
         state["stdout_bytes"] = len(stdout_text.encode("utf-8"))
         state["stderr_bytes"] = len(stderr_text.encode("utf-8"))
-    return state
+    return _public_job_state(state)
 
 
 def _list_inspect_jobs():
@@ -632,7 +641,7 @@ def main():
     )
     dashboard_parser = cloudwatch_subparsers.add_parser(
         "create-dashboard",
-        help="Create AWSUtils CloudWatch dashboards.",
+        help="Create CloudWatch dashboards.",
         add_help=False,
     )
     dashboard_parser.add_argument("--dashboard", choices=("full", "simple", "all"), default="all")
@@ -649,14 +658,14 @@ def main():
 
     create_parser = inspect_subparsers.add_parser(
         "create-inspect-job",
-        help="Install bptools and run an inspection job in the background.",
+        help="Install the inspection binary and run a job in the background.",
         add_help=False,
     )
-    create_parser.add_argument("--ids", help="Comma-separated bptools check IDs to run.")
+    create_parser.add_argument("--ids", help="Comma-separated check IDs to run.")
     create_parser.add_argument("--services", help="Comma-separated AWS services to inspect.")
-    create_parser.add_argument("--concurrency", type=int, help="Maximum concurrent bptools checks.")
-    create_parser.add_argument("--no-prefetch", action="store_true", help="Disable bptools cache prefetching.")
-    create_parser.add_argument("--force-install", action="store_true", help="Download the bptools binary even if it already exists.")
+    create_parser.add_argument("--concurrency", type=int, help="Maximum concurrent checks.")
+    create_parser.add_argument("--no-prefetch", action="store_true", help="Disable inspection cache prefetching.")
+    create_parser.add_argument("--force-install", action="store_true", help="Download the inspection binary even if it already exists.")
 
     describe_parser = inspect_subparsers.add_parser(
         "describe-inspect-job",
@@ -739,7 +748,7 @@ def main():
 
     args = parser.parse_args()
     if args.command == "hello":
-        print("Hello from awsutils!")
+        print("Hello!")
         return 0
     if args.command == "cloudwatch" and args.cloudwatch_command == "create-dashboard":
         return create_cloudwatch_dashboard(args)

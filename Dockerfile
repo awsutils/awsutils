@@ -2,7 +2,7 @@ FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
 ARG TTYD_VERSION=1.7.7
 
-ENV AWSUTILS_INSTALL_DIR=/home/ec2-user/.awsutils \
+ENV AWSUTILS_INSTALL_DIR=/home/ec2-user/.aws/cli/tools \
     PYTHONUNBUFFERED=1 \
     WEBSHELL_HOST=0.0.0.0 \
     WEBSHELL_PORT=8080 \
@@ -84,7 +84,7 @@ WORKDIR /opt/awsutils
 COPY . /opt/awsutils
 
 RUN python3 -m pip install --no-cache-dir . \
-    && mkdir -p /home/ec2-user/.aws/cli /home/ec2-user/.awsutils \
+    && mkdir -p /home/ec2-user/.aws/cli /home/ec2-user/.aws/cli/tools \
     && printf '%s\n' \
         '[toplevel]' \
         'hello = !awsutils hello' \

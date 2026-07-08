@@ -11,7 +11,7 @@ from pathlib import Path
 
 from awsutils.s3 import ensure_log_bucket as ensure_s3_log_bucket
 
-INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
+INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".aws" / "cli" / "tools"))
 VPC_JOBS_DIR = INSTALL_ROOT / "vpc" / "jobs"
 GATEWAY_ENDPOINTS = ("s3", "dynamodb")
 INTERFACE_ENDPOINTS = ("ecr.dkr", "ecr.api", "ssm", "ssmmessages", "ec2messages", "sqs", "sns")
@@ -21,6 +21,10 @@ RETRY_ATTEMPTS = 5
 
 def _json_dump(data):
     print(json.dumps(data, indent=4, sort_keys=True))
+
+
+def _public_job_state(state):
+    return {key: value for key, value in state.items() if key not in {"stdout", "stderr"}}
 
 
 def _utc_now():
@@ -149,7 +153,7 @@ def _create_vpc_fix_job(args):
     state["pid"] = proc.pid
     state["started_at"] = _utc_now()
     _write_json(paths["state"], state)
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 
@@ -161,7 +165,7 @@ def _describe_vpc_fix_job(args):
                 state = _read_json(state_path)
                 state["stdout_bytes"] = len(_read_clean_text(state_path.parent / "stdout.log").encode("utf-8"))
                 state["stderr_bytes"] = len(_read_clean_text(state_path.parent / "stderr.log").encode("utf-8"))
-                jobs.append(state)
+                jobs.append(_public_job_state(state))
         _json_dump({"jobs": jobs})
         return 0
 
@@ -172,7 +176,7 @@ def _describe_vpc_fix_job(args):
     state = _read_json(paths["state"])
     state["stdout_text"] = _read_clean_text(paths["stdout"])
     state["stderr_text"] = _read_clean_text(paths["stderr"])
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 

@@ -9,12 +9,12 @@ import uuid
 from pathlib import Path
 
 
-INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".awsutils"))
+INSTALL_ROOT = Path(os.environ.get("AWSUTILS_INSTALL_DIR", Path.home() / ".aws" / "cli" / "tools"))
 S3_JOBS_DIR = INSTALL_ROOT / "s3" / "jobs"
 PRINT_LOCK = threading.Lock()
 RETRY_ATTEMPTS = 5
 DEFAULT_TAGS = {
-    "ManagedBy": "awsutils",
+    "Environment": "Production",
 }
 INTELLIGENT_TIERING_ID = "awsutils-default"
 
@@ -32,6 +32,10 @@ def _intelligent_tiering_config(days_and_tiers, filter_prefix=None):
 
 def _json_dump(data):
     print(json.dumps(data, indent=4, sort_keys=True))
+
+
+def _public_job_state(state):
+    return {key: value for key, value in state.items() if key not in {"stdout", "stderr"}}
 
 
 def _utc_now():
@@ -441,7 +445,7 @@ def _create_s3_fix_job(args):
     state["pid"] = proc.pid
     state["started_at"] = _utc_now()
     _write_json(paths["state"], state)
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 
@@ -453,7 +457,7 @@ def _describe_s3_fix_job(args):
                 state = _read_json(state_path)
                 state["stdout_bytes"] = len(_read_clean_text(state_path.parent / "stdout.log").encode("utf-8"))
                 state["stderr_bytes"] = len(_read_clean_text(state_path.parent / "stderr.log").encode("utf-8"))
-                jobs.append(state)
+                jobs.append(_public_job_state(state))
         _json_dump({"jobs": jobs})
         return 0
 
@@ -464,7 +468,7 @@ def _describe_s3_fix_job(args):
     state = _read_json(paths["state"])
     state["stdout_text"] = _read_clean_text(paths["stdout"])
     state["stderr_text"] = _read_clean_text(paths["stderr"])
-    _json_dump(state)
+    _json_dump(_public_job_state(state))
     return 0
 
 

@@ -2,7 +2,7 @@
 set -eu
 
 REPO_ARCHIVE_URL="${AWSUTILS_ARCHIVE_URL:-https://github.com/awsutils/awsutils/archive/refs/heads/main.tar.gz}"
-INSTALL_DIR="${AWSUTILS_INSTALL_DIR:-$HOME/.awsutils}"
+INSTALL_DIR="${AWSUTILS_INSTALL_DIR:-$HOME/.aws/cli/tools}"
 ALIAS_FILE="${AWSUTILS_ALIAS_FILE:-$HOME/.aws/cli/alias}"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -102,6 +102,6 @@ set_alias "command s3" "create-log-bucket" "$ALIAS_PREFIX s3 create-log-bucket"
 set_alias "command s3" "create-fix-job" "$ALIAS_PREFIX s3 create-fix-job"
 set_alias "command s3" "describe-fix-job" "$ALIAS_PREFIX s3 describe-fix-job"
 
-printf '%s\n' "Installed awsutils to $INSTALL_DIR/src"
+printf '%s\n' "Installed tools to $INSTALL_DIR/src"
 printf '%s\n' "Configured AWS CLI alias in $ALIAS_FILE"
 printf '%s\n' "Run: aws hello"

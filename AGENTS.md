@@ -18,7 +18,7 @@ python3 -m awsutils.cli
 
 ## Code Layout
 
-- `awsutils/cli.py`: CLI parsing, help text, `hello`, and inspect/bptools job commands.
+- `awsutils/cli.py`: CLI parsing, help text, `hello`, and inspect job commands.
 - `awsutils/cloudwatch.py`: CloudWatch dashboard creation utilities.
 - `awsutils/logs.py`: CloudWatch Logs fix-job implementation.
 - `awsutils/s3.py`: S3 log-bucket and fix-job implementation.
@@ -62,14 +62,14 @@ python3 -m awsutils.cli inspect describe-inspect-job
 - `awsutils/s3.py` can create and modify S3 buckets, including bucket policies, versioning, lifecycle configuration, intelligent tiering, tags, encryption, public access blocks, and server access logging.
 - Do not run mutating commands against a real AWS account during routine verification unless explicitly requested.
 - Prefer help commands and describe/list commands for local smoke tests.
-- The inspect/bptools path intentionally does not use the retry wrapper used by CloudWatch/VPC utilities.
+- The inspect binary path intentionally does not use the retry wrapper used by CloudWatch/VPC utilities.
 
 ## Implementation Notes
 
 - Keep `cli.py` focused on argument parsing and dispatch.
 - Put service-specific behavior in separate modules.
 - Preserve JSON output contracts for job create/describe commands.
-- Background jobs store state under `~/.awsutils` by default, or `AWSUTILS_INSTALL_DIR` when set.
+- Background jobs store state under `~/.aws/cli/tools` by default, or `AWSUTILS_INSTALL_DIR` when set.
 - If syntax checks create `awsutils/__pycache__/`, remove it before committing.
 
 ## Git Notes
