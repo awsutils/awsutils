@@ -46,16 +46,62 @@ if ! grep -q '^\[toplevel\]' "$ALIAS_FILE"; then
     printf '\n[toplevel]\n' >>"$ALIAS_FILE"
 fi
 
-ALIAS_COMMAND="utils = !PYTHONPATH=$INSTALL_DIR/src $PYTHON_BIN -m awsutils.cli"
+ensure_section() {
+    section="$1"
+    if ! grep -q "^\[$section\]" "$ALIAS_FILE"; then
+        printf '\n[%s]\n' "$section" >>"$ALIAS_FILE"
+    fi
+}
 
-if grep -q '^utils = ' "$ALIAS_FILE"; then
-    TMP_ALIAS="$TMP_DIR/alias"
-    sed "s|^utils = .*|$ALIAS_COMMAND|" "$ALIAS_FILE" >"$TMP_ALIAS"
-    mv "$TMP_ALIAS" "$ALIAS_FILE"
-else
-    printf '%s\n' "$ALIAS_COMMAND" >>"$ALIAS_FILE"
-fi
+set_alias() {
+    section="$1"
+    alias_name="$2"
+    alias_command="$3"
+    ensure_section "$section"
+    tmp_alias="$TMP_DIR/alias"
+    awk -v section="[$section]" -v name="$alias_name" -v command="$alias_name = $alias_command" '
+        BEGIN { in_section = 0; done = 0 }
+        $0 == section { in_section = 1; print; next }
+        /^\[/ {
+            if (in_section && !done) { print command; done = 1 }
+            in_section = 0
+        }
+        in_section && $0 ~ "^" name " = " {
+            if (!done) { print command; done = 1 }
+            next
+        }
+        { print }
+        END { if (in_section && !done) print command }
+    ' "$ALIAS_FILE" >"$tmp_alias"
+    mv "$tmp_alias" "$ALIAS_FILE"
+}
+
+remove_alias() {
+    section="$1"
+    alias_name="$2"
+    tmp_alias="$TMP_DIR/alias"
+    awk -v section="[$section]" -v name="$alias_name" '
+        $0 == section { in_section = 1; print; next }
+        /^\[/ { in_section = 0 }
+        in_section && $0 ~ "^" name " = " { next }
+        { print }
+    ' "$ALIAS_FILE" >"$tmp_alias"
+    mv "$tmp_alias" "$ALIAS_FILE"
+}
+
+ALIAS_PREFIX="!PYTHONPATH=$INSTALL_DIR/src $PYTHON_BIN -m awsutils.cli"
+
+remove_alias "toplevel" "utils"
+set_alias "toplevel" "hello" "$ALIAS_PREFIX hello"
+set_alias "toplevel" "inspect" "$ALIAS_PREFIX inspect"
+set_alias "toplevel" "vpc" "$ALIAS_PREFIX vpc"
+set_alias "command cloudwatch" "create-dashboard" "$ALIAS_PREFIX cloudwatch create-dashboard"
+set_alias "command logs" "create-fix-job" "$ALIAS_PREFIX logs create-fix-job"
+set_alias "command logs" "describe-fix-job" "$ALIAS_PREFIX logs describe-fix-job"
+set_alias "command s3" "create-log-bucket" "$ALIAS_PREFIX s3 create-log-bucket"
+set_alias "command s3" "create-fix-job" "$ALIAS_PREFIX s3 create-fix-job"
+set_alias "command s3" "describe-fix-job" "$ALIAS_PREFIX s3 describe-fix-job"
 
 printf '%s\n' "Installed awsutils to $INSTALL_DIR/src"
 printf '%s\n' "Configured AWS CLI alias in $ALIAS_FILE"
-printf '%s\n' "Run: aws utils hello"
+printf '%s\n' "Run: aws hello"

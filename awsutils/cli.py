@@ -42,13 +42,13 @@ def _show_help(argv):
     topic = [arg for arg in argv if arg not in {"help", "--help", "-h"}]
     if topic == []:
         print("""NAME
-     utils - AWS utility commands
+     awsutils - AWS utility commands
 
 DESCRIPTION
      Utility commands for AWS CLI.
 
 SYNOPSIS
-     aws utils <command> [parameters]
+     aws <command> [parameters]
 
 AVAILABLE COMMANDS
      * hello
@@ -72,7 +72,7 @@ DESCRIPTION
      Create AWSUtils CloudWatch dashboards.
 
 SYNOPSIS
-     aws utils cloudwatch <command> [parameters]
+     aws cloudwatch <command> [parameters]
 
 AVAILABLE COMMANDS
      * create-dashboard
@@ -83,7 +83,7 @@ AVAILABLE COMMANDS
      create-dashboard - Create CloudWatch dashboards
 
 SYNOPSIS
-     aws utils cloudwatch create-dashboard
+     aws cloudwatch create-dashboard
           [--dashboard full|simple|all]
           [--name <value>]
           [--base-url <value>]
@@ -98,7 +98,7 @@ DESCRIPTION
      Installs and runs bptools inspection jobs in the background.
 
 SYNOPSIS
-     aws utils inspect <command> [parameters]
+     aws inspect <command> [parameters]
 
 AVAILABLE COMMANDS
      * create-inspect-job
@@ -115,7 +115,7 @@ DESCRIPTION
      inspection job in the background.
 
 SYNOPSIS
-     aws utils inspect create-inspect-job
+     aws inspect create-inspect-job
           [--ids <value>]
           [--services <value>]
           [--concurrency <value>]
@@ -148,7 +148,7 @@ DESCRIPTION
      are listed.
 
 SYNOPSIS
-     aws utils inspect describe-inspect-job
+     aws inspect describe-inspect-job
           [--job-id <value>]
 
 OPTIONS
@@ -164,7 +164,7 @@ DESCRIPTION
      Start and describe background CloudWatch Logs fix jobs.
 
 SYNOPSIS
-     aws utils logs <command> [parameters]
+     aws logs <command> [parameters]
 
 AVAILABLE COMMANDS
      * create-fix-job
@@ -181,7 +181,7 @@ DESCRIPTION
      protection, and sets retention for every CloudWatch Logs log group.
 
 SYNOPSIS
-     aws utils logs create-fix-job
+     aws logs create-fix-job
           [--region <value>]
           [--retention-days <value>]
           [--tag Key=Value]
@@ -193,7 +193,7 @@ SYNOPSIS
      describe-fix-job - Describe CloudWatch Logs fix jobs
 
 SYNOPSIS
-     aws utils logs describe-fix-job
+     aws logs describe-fix-job
           [--job-id <value>]
 """)
         return 0
@@ -205,7 +205,7 @@ DESCRIPTION
      Create shared log buckets and start S3 bucket fix jobs.
 
 SYNOPSIS
-     aws utils s3 <command> [parameters]
+     aws s3 <command> [parameters]
 
 AVAILABLE COMMANDS
      * create-log-bucket
@@ -224,7 +224,7 @@ DESCRIPTION
      Flow Logs, ALB access logs, and S3 server access logs delivery.
 
 SYNOPSIS
-     aws utils s3 create-log-bucket
+     aws s3 create-log-bucket
           [--bucket <value>]
           [--region <value>]
 """)
@@ -239,7 +239,7 @@ DESCRIPTION
      existing S3 buckets.
 
 SYNOPSIS
-     aws utils s3 create-fix-job
+     aws s3 create-fix-job
           [--region <value>]
           [--log-bucket <value>]
           [--tag Key=Value]
@@ -251,7 +251,7 @@ SYNOPSIS
      describe-fix-job - Describe S3 fix jobs
 
 SYNOPSIS
-     aws utils s3 describe-fix-job
+     aws s3 describe-fix-job
           [--job-id <value>]
 """)
         return 0
@@ -263,7 +263,7 @@ DESCRIPTION
      Start and describe background VPC fix jobs.
 
 SYNOPSIS
-     aws utils vpc <command> [parameters]
+     aws vpc <command> [parameters]
 
 AVAILABLE COMMANDS
      * create-fix-job
@@ -281,7 +281,7 @@ DESCRIPTION
      or all VPCs in the current region.
 
 SYNOPSIS
-     aws utils vpc create-fix-job
+     aws vpc create-fix-job
           [--vpc-ids <value>]
           [--region <value>]
           [--max-workers <value>]
@@ -292,7 +292,7 @@ SYNOPSIS
      describe-fix-job - Describe VPC fix jobs
 
 SYNOPSIS
-     aws utils vpc describe-fix-job
+     aws vpc describe-fix-job
           [--job-id <value>]
 """)
         return 0
@@ -579,7 +579,7 @@ def _read_clean_text(path):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "_run-inspect-job":
-        run_parser = NoColorArgumentParser(prog="aws utils _run-inspect-job")
+        run_parser = NoColorArgumentParser(prog="aws _run-inspect-job")
         run_parser.add_argument("command")
         run_parser.add_argument("job_id")
         run_parser.add_argument("binary")
@@ -587,7 +587,7 @@ def main():
         return _run_inspect_job(run_parser.parse_args())
 
     if len(sys.argv) > 1 and sys.argv[1] == "_run-vpc-fix-job":
-        run_parser = NoColorArgumentParser(prog="aws utils _run-vpc-fix-job")
+        run_parser = NoColorArgumentParser(prog="aws _run-vpc-fix-job")
         run_parser.add_argument("command")
         run_parser.add_argument("job_id")
         run_parser.add_argument("--vpc-ids")
@@ -596,7 +596,7 @@ def main():
         return run_vpc_fix_job(run_parser.parse_args())
 
     if len(sys.argv) > 1 and sys.argv[1] == "_run-logs-fix-job":
-        run_parser = NoColorArgumentParser(prog="aws utils _run-logs-fix-job")
+        run_parser = NoColorArgumentParser(prog="aws _run-logs-fix-job")
         run_parser.add_argument("command")
         run_parser.add_argument("job_id")
         run_parser.add_argument("--region")
@@ -606,7 +606,7 @@ def main():
         return run_logs_fix_job(run_parser.parse_args())
 
     if len(sys.argv) > 1 and sys.argv[1] == "_run-s3-fix-job":
-        run_parser = NoColorArgumentParser(prog="aws utils _run-s3-fix-job")
+        run_parser = NoColorArgumentParser(prog="aws _run-s3-fix-job")
         run_parser.add_argument("command")
         run_parser.add_argument("job_id")
         run_parser.add_argument("--region")
@@ -620,7 +620,7 @@ def main():
         if code is not None:
             return code
 
-    parser = NoColorArgumentParser(prog="aws utils", add_help=False)
+    parser = NoColorArgumentParser(prog="aws", add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True, parser_class=NoColorArgumentParser)
     subparsers.add_parser("hello", help="Print a friendly greeting.", add_help=False)
 
@@ -739,7 +739,7 @@ def main():
 
     args = parser.parse_args()
     if args.command == "hello":
-        print("Hello from aws utils!")
+        print("Hello from awsutils!")
         return 0
     if args.command == "cloudwatch" and args.cloudwatch_command == "create-dashboard":
         return create_cloudwatch_dashboard(args)

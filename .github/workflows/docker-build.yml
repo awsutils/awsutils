@@ -81,7 +81,7 @@ jobs:
       - name: Smoke test image
         run: |
           docker run --rm "${GHCR_IMAGE}@${{ steps.build.outputs.digest }}" awsutils hello
-          docker run --rm "${GHCR_IMAGE}@${{ steps.build.outputs.digest }}" aws utils hello
+          docker run --rm "${GHCR_IMAGE}@${{ steps.build.outputs.digest }}" aws hello
 
       - name: Export digest
         run: |

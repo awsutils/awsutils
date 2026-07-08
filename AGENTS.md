@@ -7,7 +7,7 @@ Guidance for coding agents working in this repository.
 This is a small Python AWS CLI alias extension. It provides commands under:
 
 ```sh
-aws utils ...
+aws ...
 ```
 
 The installer registers an AWS CLI alias that runs:

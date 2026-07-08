@@ -85,7 +85,24 @@ COPY . /opt/awsutils
 
 RUN python3 -m pip install --no-cache-dir . \
     && mkdir -p /home/ec2-user/.aws/cli /home/ec2-user/.awsutils \
-    && printf '[toplevel]\nutils = !awsutils\n' >/home/ec2-user/.aws/cli/alias \
+    && printf '%s\n' \
+        '[toplevel]' \
+        'hello = !awsutils hello' \
+        'inspect = !awsutils inspect' \
+        'vpc = !awsutils vpc' \
+        '' \
+        '[command cloudwatch]' \
+        'create-dashboard = !awsutils cloudwatch create-dashboard' \
+        '' \
+        '[command logs]' \
+        'create-fix-job = !awsutils logs create-fix-job' \
+        'describe-fix-job = !awsutils logs describe-fix-job' \
+        '' \
+        '[command s3]' \
+        'create-log-bucket = !awsutils s3 create-log-bucket' \
+        'create-fix-job = !awsutils s3 create-fix-job' \
+        'describe-fix-job = !awsutils s3 describe-fix-job' \
+        >/home/ec2-user/.aws/cli/alias \
     && chown -R ec2-user:ec2-user /home/ec2-user /opt/awsutils
 
 COPY docker/webshell-entrypoint /usr/local/bin/awsutils-webshell
