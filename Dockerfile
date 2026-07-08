@@ -64,6 +64,18 @@ RUN set -eux; \
     rm -f /tmp/ttyd.SHA256SUMS; \
     ttyd --version
 
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+        x86_64) crane_arch="x86_64" ;; \
+        aarch64) crane_arch="arm64" ;; \
+        *) printf 'unsupported architecture for crane: %s\n' "$arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_${crane_arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin crane; \
+    chmod 0755 /usr/local/bin/crane; \
+    crane version
+
 RUN useradd --create-home --shell /bin/bash ec2-user \
     && passwd -d ec2-user \
     && printf 'ec2-user ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/ec2-user \
