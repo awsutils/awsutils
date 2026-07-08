@@ -4,6 +4,8 @@ Basic AWS CLI v2 extension using AWS CLI aliases. It adds:
 
 ```sh
 aws hello
+aws backup create-backup
+aws backup describe-backup-job --job-id <job-id>
 aws cloudwatch create-dashboard
 aws inspect create-inspect-job
 aws inspect describe-inspect-job --job-id <job-id>
@@ -34,6 +36,7 @@ The installer downloads the source archive from GitHub without using `git` and r
 ```ini
 [toplevel]
 hello = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli hello
+backup = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli backup
 inspect = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli inspect
 vpc = !PYTHONPATH=$HOME/.aws/cli/tools/src python3 -m awsutils.cli vpc
 
@@ -126,6 +129,28 @@ aws inspect create-inspect-job --concurrency 8 --no-prefetch
 ```
 
 `describe-inspect-job` always returns JSON. If the inspection binary emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
+
+## Backup Jobs
+
+Start a background job that creates native on-demand backups/snapshots for supported resources in the current region:
+
+```sh
+aws backup create-backup
+```
+
+Supported services are DynamoDB, RDS instances and clusters, Redshift, DocumentDB, ElastiCache, Neptune, EBS, EFS, and FSx. Limit the job to selected services or a region:
+
+```sh
+aws backup create-backup --services dynamodb,rds,redshift --region us-east-1
+aws backup create-backup --prefix pre-change --max-workers 4
+```
+
+Describe a job or list all known jobs:
+
+```sh
+aws backup describe-backup-job --job-id <job-id>
+aws backup describe-backup-job
+```
 
 ## CloudWatch Logs Fix Jobs
 

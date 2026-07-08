@@ -93,6 +93,7 @@ ALIAS_PREFIX="!PYTHONPATH=$INSTALL_DIR/src $PYTHON_BIN -m awsutils.cli"
 
 remove_alias "toplevel" "utils"
 set_alias "toplevel" "hello" "$ALIAS_PREFIX hello"
+set_alias "toplevel" "backup" "$ALIAS_PREFIX backup"
 set_alias "toplevel" "inspect" "$ALIAS_PREFIX inspect"
 set_alias "toplevel" "vpc" "$ALIAS_PREFIX vpc"
 set_alias "command cloudwatch" "create-dashboard" "$ALIAS_PREFIX cloudwatch create-dashboard"

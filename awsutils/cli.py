@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from urllib.request import urlretrieve
 
+from awsutils.backup import DEFAULT_SERVICES as DEFAULT_BACKUP_SERVICES
+from awsutils.backup import create_backup_job, describe_backup_job, run_backup_job
 from awsutils.cloudwatch import DEFAULT_ASSET_BASE_URL, create_cloudwatch_dashboard
 from awsutils.logs import DEFAULT_RETENTION_DAYS, create_logs_fix_job, describe_logs_fix_job, run_logs_fix_job
 from awsutils.s3 import create_log_bucket, create_s3_fix_job, describe_s3_fix_job, run_s3_fix_job
@@ -56,6 +58,8 @@ SYNOPSIS
      aws <command> [parameters]
 
 AVAILABLE COMMANDS
+     * backup
+
      * hello
 
      * cloudwatch
@@ -67,6 +71,48 @@ AVAILABLE COMMANDS
      * s3
 
      * vpc
+""")
+        return 0
+    if topic == ["backup"]:
+        print("""NAME
+     backup - Backup utility commands
+
+DESCRIPTION
+     Start and describe background backup jobs for databases, caches, file
+     systems, and EBS volumes.
+
+SYNOPSIS
+     aws backup <command> [parameters]
+
+AVAILABLE COMMANDS
+     * create-backup
+
+     * describe-backup-job
+""")
+        return 0
+    if topic == ["backup", "create-backup"]:
+        print("""NAME
+     create-backup - Create on-demand backups and snapshots
+
+DESCRIPTION
+     Starts a background job that creates native on-demand backups/snapshots for
+     DynamoDB, RDS, Redshift, DocumentDB, ElastiCache, Neptune, EBS, EFS, and FSx.
+
+SYNOPSIS
+     aws backup create-backup
+          [--region <value>]
+          [--services <value>]
+          [--prefix <value>]
+          [--max-workers <value>]
+""")
+        return 0
+    if topic == ["backup", "describe-backup-job"]:
+        print("""NAME
+     describe-backup-job - Describe backup jobs
+
+SYNOPSIS
+     aws backup describe-backup-job
+          [--job-id <value>]
 """)
         return 0
     if topic == ["cloudwatch"]:
@@ -624,6 +670,16 @@ def main():
         run_parser.add_argument("--max-workers", type=int, default=8)
         return run_s3_fix_job(run_parser.parse_args())
 
+    if len(sys.argv) > 1 and sys.argv[1] == "_run-backup-job":
+        run_parser = NoColorArgumentParser(prog="aws _run-backup-job")
+        run_parser.add_argument("command")
+        run_parser.add_argument("job_id")
+        run_parser.add_argument("--region")
+        run_parser.add_argument("--services", default=",".join(DEFAULT_BACKUP_SERVICES))
+        run_parser.add_argument("--prefix", default="awsutils")
+        run_parser.add_argument("--max-workers", type=int, default=8)
+        return run_backup_job(run_parser.parse_args())
+
     if any(arg in {"help", "--help", "-h"} for arg in sys.argv[1:]):
         code = _show_help(sys.argv[1:])
         if code is not None:
@@ -632,6 +688,28 @@ def main():
     parser = NoColorArgumentParser(prog="aws", add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True, parser_class=NoColorArgumentParser)
     subparsers.add_parser("hello", help="Print a friendly greeting.", add_help=False)
+
+    backup_parser = subparsers.add_parser("backup", help="Backup utility commands.", add_help=False)
+    backup_subparsers = backup_parser.add_subparsers(
+        dest="backup_command",
+        required=True,
+        parser_class=NoColorArgumentParser,
+    )
+    backup_create_parser = backup_subparsers.add_parser(
+        "create-backup",
+        help="Create a background backup job.",
+        add_help=False,
+    )
+    backup_create_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
+    backup_create_parser.add_argument("--services", help="Comma-separated services. Defaults to all supported services.")
+    backup_create_parser.add_argument("--prefix", default="awsutils", help="Prefix for backup/snapshot names.")
+    backup_create_parser.add_argument("--max-workers", type=int, default=8, help="Maximum parallel backup operations.")
+    backup_describe_parser = backup_subparsers.add_parser(
+        "describe-backup-job",
+        help="Describe backup jobs as JSON.",
+        add_help=False,
+    )
+    backup_describe_parser.add_argument("--job-id", help="Backup job ID returned by create-backup. Omit to list all jobs.")
 
     cloudwatch_parser = subparsers.add_parser("cloudwatch", help="CloudWatch utility commands.", add_help=False)
     cloudwatch_subparsers = cloudwatch_parser.add_subparsers(
@@ -750,6 +828,10 @@ def main():
     if args.command == "hello":
         print("Hello!")
         return 0
+    if args.command == "backup" and args.backup_command == "create-backup":
+        return create_backup_job(args)
+    if args.command == "backup" and args.backup_command == "describe-backup-job":
+        return describe_backup_job(args)
     if args.command == "cloudwatch" and args.cloudwatch_command == "create-dashboard":
         return create_cloudwatch_dashboard(args)
     if args.command == "inspect" and args.inspect_command == "create-inspect-job":
