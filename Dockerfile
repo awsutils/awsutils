@@ -13,12 +13,11 @@ RUN dnf install -y \
         bash \
         bind-utils \
         ca-certificates \
-        curl \
         file \
         findutils \
         git \
         gzip \
-        iproute2 \
+        iproute \
         iputils \
         jq \
         less \
@@ -28,6 +27,7 @@ RUN dnf install -y \
         nodejs24 \
         openssh-server \
         openssh-clients \
+        passwd \
         procps-ng \
         psmisc \
         python3 \
@@ -36,7 +36,6 @@ RUN dnf install -y \
         spal-release \
         sudo \
         tar \
-        tini \
         tree \
         unzip \
         vim \
@@ -97,4 +96,4 @@ WORKDIR /home/ec2-user
 
 EXPOSE 22 8080
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/awsutils-webshell"]
+ENTRYPOINT ["/usr/local/bin/awsutils-webshell"]
