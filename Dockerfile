@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
 ARG TTYD_VERSION=1.7.7
 
@@ -8,26 +8,32 @@ ENV AWSUTILS_INSTALL_DIR=/home/ec2-user/.awsutils \
     WEBSHELL_PORT=8080 \
     WEBSHELL_SHELL=/bin/bash
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN dnf install -y \
         awscli \
         bash \
+        bind-utils \
         ca-certificates \
         curl \
-        dnsutils \
         file \
+        findutils \
         git \
+        gzip \
         iproute2 \
-        iputils-ping \
+        iputils \
         jq \
         less \
         lsof \
         nano \
-        netcat-openbsd \
+        nmap-ncat \
+        nodejs24 \
         openssh-server \
-        openssh-client \
-        procps \
+        openssh-clients \
+        procps-ng \
         psmisc \
+        python3 \
+        python3-pip \
+        shadow-utils \
+        spal-release \
         sudo \
         tar \
         tini \
@@ -36,16 +42,17 @@ RUN apt-get update \
         vim \
         wget \
         zip \
-    && rm -rf /var/lib/apt/lists/*
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
+    arch="$(uname -m)"; \
     case "$arch" in \
-        amd64) ttyd_arch="x86_64" ;; \
-        arm64) ttyd_arch="aarch64" ;; \
-        armhf) ttyd_arch="armhf" ;; \
-        armel) ttyd_arch="arm" ;; \
-        i386) ttyd_arch="i686" ;; \
+        x86_64) ttyd_arch="x86_64" ;; \
+        aarch64) ttyd_arch="aarch64" ;; \
+        armv7l) ttyd_arch="armhf" ;; \
+        armv6l) ttyd_arch="arm" ;; \
+        i386|i686) ttyd_arch="i686" ;; \
         s390x) ttyd_arch="s390x" ;; \
         *) printf 'unsupported architecture for ttyd: %s\n' "$arch" >&2; exit 1 ;; \
     esac; \
