@@ -16,7 +16,8 @@ RETRY_ATTEMPTS = 5
 DEFAULT_TAGS = {
     "Environment": "Production",
 }
-INTELLIGENT_TIERING_ID = "awsutils-default"
+INTELLIGENT_TIERING_ID = "archive-tiering"
+LIFECYCLE_RULE_ID = "archive-lifecycle"
 
 
 def _intelligent_tiering_config(days_and_tiers, filter_prefix=None):
@@ -168,7 +169,14 @@ def _existing_bucket_policy(bucket):
 
 def _put_merged_bucket_policy(bucket, statements):
     policy = _existing_bucket_policy(bucket)
-    existing = [stmt for stmt in policy.get("Statement", []) if stmt.get("Sid") not in {item["Sid"] for item in statements}]
+    managed_sids = {item["Sid"] for item in statements}
+    managed_bodies = [{key: value for key, value in item.items() if key != "Sid"} for item in statements]
+    existing = []
+    for statement in policy.get("Statement", []):
+        body = {key: value for key, value in statement.items() if key != "Sid"}
+        if statement.get("Sid") in managed_sids or body in managed_bodies:
+            continue
+        existing.append(statement)
     policy["Version"] = policy.get("Version", "2012-10-17")
     policy["Statement"] = [*existing, *statements]
     return _aws_ok(["s3api", "put-bucket-policy", "--bucket", bucket, "--policy", json.dumps(policy)])
@@ -177,7 +185,7 @@ def _put_merged_bucket_policy(bucket, statements):
 def _log_bucket_policy_statements(bucket, account_id):
     return [
         {
-            "Sid": "AWSUtilsAllowVPCFlowLogsAclCheck",
+            "Sid": "AllowVPCFlowLogsAclCheck",
             "Effect": "Allow",
             "Principal": {"Service": "delivery.logs.amazonaws.com"},
             "Action": ["s3:GetBucketAcl", "s3:ListBucket"],
@@ -185,7 +193,7 @@ def _log_bucket_policy_statements(bucket, account_id):
             "Condition": {"StringEquals": {"aws:SourceAccount": account_id}},
         },
         {
-            "Sid": "AWSUtilsAllowVPCFlowLogsWrite",
+            "Sid": "AllowVPCFlowLogsWrite",
             "Effect": "Allow",
             "Principal": {"Service": "delivery.logs.amazonaws.com"},
             "Action": "s3:PutObject",
@@ -198,14 +206,14 @@ def _log_bucket_policy_statements(bucket, account_id):
             },
         },
         {
-            "Sid": "AWSUtilsAllowALBLogDeliveryWrite",
+            "Sid": "AllowALBLogDeliveryWrite",
             "Effect": "Allow",
             "Principal": {"Service": "logdelivery.elasticloadbalancing.amazonaws.com"},
             "Action": "s3:PutObject",
             "Resource": _bucket_object_arn(bucket, f"AWSLogs/{account_id}/*"),
         },
         {
-            "Sid": "AWSUtilsAllowS3ServerAccessLogsWrite",
+            "Sid": "AllowS3ServerAccessLogsWrite",
             "Effect": "Allow",
             "Principal": {"Service": "logging.s3.amazonaws.com"},
             "Action": "s3:PutObject",
@@ -217,7 +225,7 @@ def _log_bucket_policy_statements(bucket, account_id):
 
 def _deny_insecure_transport_statement(bucket):
     return {
-        "Sid": "AWSUtilsDenyInsecureTransport",
+        "Sid": "DenyInsecureTransport",
         "Effect": "Deny",
         "Principal": "*",
         "Action": "s3:*",
@@ -345,7 +353,7 @@ def _put_lifecycle(bucket):
     config = {
         "Rules": [
             {
-                "ID": "awsutils-default-lifecycle",
+                "ID": LIFECYCLE_RULE_ID,
                 "Status": "Enabled",
                 "Filter": {"Prefix": ""},
                 "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},

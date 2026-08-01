@@ -145,6 +145,8 @@ aws backup create-backup --services dynamodb,rds,redshift --region us-east-1
 aws backup create-backup --prefix pre-change --max-workers 4
 ```
 
+Backup and snapshot names contain the timestamp, service, and source resource ID. Use `--prefix` to add an optional custom prefix.
+
 Describe a job or list all known jobs:
 
 ```sh

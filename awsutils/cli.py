@@ -701,7 +701,7 @@ def main():
         run_parser.add_argument("job_id")
         run_parser.add_argument("--region")
         run_parser.add_argument("--services", default=",".join(DEFAULT_BACKUP_SERVICES))
-        run_parser.add_argument("--prefix", default="awsutils")
+        run_parser.add_argument("--prefix", default="")
         run_parser.add_argument("--max-workers", type=int, default=8)
         return run_backup_job(run_parser.parse_args())
 
@@ -727,7 +727,7 @@ def main():
     )
     backup_create_parser.add_argument("--region", help="AWS region. Defaults to AWS CLI configuration/environment.")
     backup_create_parser.add_argument("--services", help="Comma-separated services. Defaults to all supported services.")
-    backup_create_parser.add_argument("--prefix", default="awsutils", help="Prefix for backup/snapshot names.")
+    backup_create_parser.add_argument("--prefix", default="", help="Optional prefix for backup/snapshot names.")
     backup_create_parser.add_argument("--max-workers", type=int, default=8, help="Maximum parallel backup operations.")
     backup_describe_parser = backup_subparsers.add_parser(
         "describe-backup-job",
