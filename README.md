@@ -128,7 +128,7 @@ aws inspect create-inspect-job --ids ec2-imdsv2-check
 aws inspect create-inspect-job --concurrency 8 --no-prefetch
 ```
 
-`describe-inspect-job` always returns JSON. If the inspection binary emits JSON to stdout, it is parsed into `best_practice_result`; raw captured stdout and stderr are included as `stdout_text` and `stderr_text`.
+`describe-inspect-job` always returns JSON. A completed job includes the unique failed resource IDs in `affected_resources`, with detailed findings in `best_practice_result`. Raw captured stdout and stderr are included as `stdout_text` and `stderr_text` when describing a specific job.
 
 ## Backup Jobs
 

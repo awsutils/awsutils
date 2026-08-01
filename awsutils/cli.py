@@ -195,8 +195,8 @@ OPTIONS
      describe-inspect-job - Describe inspect jobs
 
 DESCRIPTION
-     Returns inspect job state as JSON. When --job-id is omitted, all known jobs
-     are listed.
+     Returns inspect job state and affected resources as JSON. When --job-id is
+     omitted, all known jobs are listed.
 
 SYNOPSIS
      aws inspect describe-inspect-job
@@ -547,6 +547,28 @@ def _parse_bptools_text(text):
     return None
 
 
+def _affected_resources(result):
+    resources = set()
+
+    def collect(value):
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+            return
+        if not isinstance(value, dict):
+            return
+
+        resource_id = value.get("resource_id")
+        status = str(value.get("status", "")).upper()
+        if resource_id and status not in {"PASS", "SKIP", "ERROR"}:
+            resources.add(str(resource_id))
+        for key in ("rules", "findings", "results"):
+            collect(value.get(key))
+
+    collect(result)
+    return sorted(resources)
+
+
 def _inspect_job_details(job_id, include_logs=True):
     paths = _job_paths(job_id)
     if not paths["state"].exists():
@@ -557,6 +579,7 @@ def _inspect_job_details(job_id, include_logs=True):
     stderr_text = _read_clean_text(paths["stderr"])
     best_practice_result = _parse_stdout(stdout_text)
     state["best_practice_result"] = best_practice_result
+    state["affected_resources"] = _affected_resources(best_practice_result)
     if include_logs:
         state["stdout_text"] = stdout_text
         state["stderr_text"] = stderr_text
@@ -571,6 +594,7 @@ def _inspect_job_details(job_id, include_logs=True):
                         "counts": rule.get("counts", {}),
                         "description": rule.get("description"),
                         "docs": rule.get("docs"),
+                        "affected_resources": _affected_resources(rule),
                     }
                     for rule in best_practice_result.get("rules", [])
                 ],
@@ -622,6 +646,7 @@ def _run_inspect_job(args):
     state["exit_code"] = proc.returncode
     state["status"] = "SUCCEEDED" if proc.returncode == 0 else "FAILED"
     state["best_practice_result"] = _parse_stdout(stdout_text)
+    state["affected_resources"] = _affected_resources(state["best_practice_result"])
     _write_json(paths["state"], state)
     return proc.returncode
 
