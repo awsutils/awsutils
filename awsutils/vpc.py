@@ -465,6 +465,19 @@ def _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, regi
     return rt_id
 
 
+def _regional_nat_gateway_id(vpc_id, region):
+    return _aws_text([
+        "ec2",
+        "describe-nat-gateways",
+        *_region_arg(region),
+        "--filter",
+        f"Name=vpc-id,Values={vpc_id}",
+        "Name=state,Values=available,pending",
+        "--query",
+        "NatGateways[?AvailabilityMode=='regional'].NatGatewayId | [0]",
+    ])
+
+
 def _ensure_nat_gateway(vpc_id, vpc_name, public_subnet_id, az, region):
     natgw_id = _aws_text([
         "ec2",
@@ -588,13 +601,19 @@ def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region, max_workers=8):
         _print_job_event(f"{vpc_id}: at least two availability zones are required for network repair")
         return
 
+    regional_natgw_id = _regional_nat_gateway_id(vpc_id, region)
+    if regional_natgw_id:
+        _aws_ok(["ec2", "wait", "nat-gateway-available", *_region_arg(region), "--nat-gateway-ids", regional_natgw_id])
+        _print_job_event(f"{vpc_id}: using regional NAT gateway {regional_natgw_id}")
+
     all_subnets = _subnets(vpc_id, region)
     subnet_by_id = {subnet.get("SubnetId"): subnet for subnet in all_subnets if subnet.get("SubnetId")}
     public_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=True)
     private_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=False)
 
     missing = []
-    for tier, subnet_ids in (("public", public_subnet_ids), ("private", private_subnet_ids)):
+    tiers = (("private", private_subnet_ids),) if regional_natgw_id else (("public", public_subnet_ids), ("private", private_subnet_ids))
+    for tier, subnet_ids in tiers:
         for az in target_azs:
             if not _subnets_in_az(subnet_ids, subnet_by_id, az):
                 missing.append((tier, az))
@@ -612,22 +631,27 @@ def _fix_vpc_networking(vpc_id, vpc_name, vpc_cidr, region, max_workers=8):
     if len(cidrs) < len(missing):
         _print_job_event(f"{vpc_id}: no free CIDR available for {len(missing) - len(cidrs)} missing subnets")
 
-    _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, region)
-    public_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=True)
+    if not regional_natgw_id:
+        _ensure_public_route_table(vpc_id, vpc_name, igw_id, public_subnet_ids, region)
+        public_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=True)
     private_subnet_ids = _subnet_ids_by_route(vpc_id, region, public=False)
     subnet_by_id = {subnet.get("SubnetId"): subnet for subnet in _subnets(vpc_id, region) if subnet.get("SubnetId")}
 
-    if not _has_subnets_in_each_az(public_subnet_ids, subnet_by_id, target_azs) or not _has_subnets_in_each_az(private_subnet_ids, subnet_by_id, target_azs):
-        _print_job_event(f"{vpc_id}: at least two public and two private subnets are required; skipping NAT route repair")
+    has_private_subnets = _has_subnets_in_each_az(private_subnet_ids, subnet_by_id, target_azs)
+    has_public_subnets = regional_natgw_id or _has_subnets_in_each_az(public_subnet_ids, subnet_by_id, target_azs)
+    if not has_public_subnets or not has_private_subnets:
+        required = "private" if regional_natgw_id else "public and private"
+        _print_job_event(f"{vpc_id}: subnets in two AZs are required for the {required} tiers; skipping NAT route repair")
         return
 
     def _fix_az_nat_and_routes(az):
-        public_in_az = _subnets_in_az(public_subnet_ids, subnet_by_id, az)
         private_in_az = _subnets_in_az(private_subnet_ids, subnet_by_id, az)
-        if not public_in_az or not private_in_az:
-            _print_job_event(f"{vpc_id}: missing public or private subnet in {az}; skipping NAT route repair for AZ")
+        public_in_az = _subnets_in_az(public_subnet_ids, subnet_by_id, az)
+        if not private_in_az or (not regional_natgw_id and not public_in_az):
+            required = "private" if regional_natgw_id else "public or private"
+            _print_job_event(f"{vpc_id}: missing {required} subnet in {az}; skipping NAT route repair for AZ")
             return False
-        natgw_id = _ensure_nat_gateway(vpc_id, vpc_name, public_in_az[0], az, region)
+        natgw_id = regional_natgw_id or _ensure_nat_gateway(vpc_id, vpc_name, public_in_az[0], az, region)
         if not natgw_id:
             _print_job_event(f"{vpc_id}: could not ensure NAT gateway in {az}; skipping private route repair for AZ")
             return False

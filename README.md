@@ -224,7 +224,7 @@ Start a background job that repairs missing VPC networking components, enables c
 aws vpc create-fix-job
 ```
 
-The job processes VPCs and endpoint creation in parallel. Failed AWS CLI calls are retried up to five times. Network repair can create internet gateways, public/private subnets, route tables, Elastic IPs, one NAT gateway per AZ, VPC endpoints, security groups, S3 buckets, and flow logs.
+The job processes VPCs and endpoint creation in parallel. Failed AWS CLI calls are retried up to five times. Network repair reuses an existing regional NAT gateway when present; otherwise, it can create internet gateways, public/private subnets, route tables, Elastic IPs, one NAT gateway per AZ, VPC endpoints, security groups, S3 buckets, and flow logs.
 
 Limit the job to selected VPCs or a region:
 
